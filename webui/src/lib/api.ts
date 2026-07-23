@@ -204,3 +204,72 @@ export async function getProject(pid: string): Promise<{ dataset_id?: string | n
     return null;
   }
 }
+
+// --- Projects panel: reopen past projects, run history, retroactive judging ---
+export type ProjectSummary = {
+  id: string;
+  name: string;
+  task_type: string;
+  base_model?: string;
+  status: string;
+  created_at?: string;
+  updated_at?: string;
+  active_run?: string | null;
+};
+
+export type RunRecord = {
+  run_name: string;
+  version?: number;
+  task?: string;
+  before?: number | null;
+  after?: number | null;
+  delta?: number | null;
+  created_at?: string;
+};
+
+export type ProjectDetail = {
+  id: string;
+  name: string;
+  goal?: string;
+  task_type: string;
+  status: string;
+  dataset_id?: string | null;
+  active_run?: string | null;
+  runs?: RunRecord[];
+};
+
+export async function listProjects(): Promise<ProjectSummary[]> {
+  try {
+    const res = await fetch(`${API_BASE}/api/projects`);
+    return (await res.json()).projects ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function getProjectDetail(pid: string): Promise<ProjectDetail | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/projects/${pid}`);
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
+}
+
+export type JudgeResult = {
+  run_name?: string;
+  before_avg?: number | null;
+  after_avg?: number | null;
+  n?: number;
+  error?: string;
+};
+
+export async function judgeRun(runName: string): Promise<JudgeResult> {
+  try {
+    const res = await fetch(`${API_BASE}/api/runs/${runName}/judge`, { method: "POST" });
+    return res.json();
+  } catch {
+    return { error: "backend unreachable" };
+  }
+}

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Settings, Download, Pencil, Plus, Trash2, X, Cloud, Upload } from "lucide-react";
+import { Settings, Download, Pencil, Plus, Trash2, X, Cloud, Upload, FolderOpen, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -16,9 +16,23 @@ import {
   saveDataset,
   colabDownloadUrl,
   getProject,
+  listProjects,
+  getProjectDetail,
+  judgeRun,
   wsUrl,
 } from "@/lib/api";
-import type { PlanData, DataStats, ScoreCard, DeployInfo, SystemInfo, Template, DatasetRow } from "@/lib/api";
+import type {
+  PlanData,
+  DataStats,
+  ScoreCard,
+  DeployInfo,
+  SystemInfo,
+  Template,
+  DatasetRow,
+  ProjectSummary,
+  ProjectDetail,
+  JudgeResult,
+} from "@/lib/api";
 
 type Msg = { kind: "msg"; role: "user" | "assistant"; content: string };
 type Training = { kind: "training"; jobId: string };
@@ -90,6 +104,37 @@ export default function Home() {
     );
   }
 
+  const [showProjects, setShowProjects] = useState(false);
+
+  async function openProject(p: ProjectDetail) {
+    setShowProjects(false);
+    setProjectId(p.id);
+    const add: Item[] = [];
+    let dataNote = "";
+    if (p.dataset_id) {
+      const d = await getDatasetFull(p.id, p.dataset_id);
+      if (d) {
+        dataNote = ` ${d.n} training examples are loaded — open **View & edit all** on the data card to review or change them.`;
+        add.push({
+          kind: "data",
+          stats: d.meta,
+          preview: (d.rows ?? []).slice(0, 4),
+          projectId: p.id,
+          datasetId: p.dataset_id,
+        });
+      }
+    }
+    const runNote = p.active_run
+      ? ` Latest trained version: \`${p.active_run}\`.`
+      : " No trained version yet.";
+    add.unshift({
+      kind: "msg",
+      role: "assistant",
+      content: `Resumed **${p.name}** (${p.task_type}).${dataNote}${runNote} Tell me what you'd like to do next — generate more data, retrain, test it, or deploy.`,
+    });
+    setItems(add);
+  }
+
   async function send(text?: string) {
     const content = (text ?? input).trim();
     if (!content || busy) return;
@@ -148,6 +193,14 @@ export default function Home() {
             <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
               {sys?.gpu?.cuda ? `${sys.gpu.total_gb.toFixed(0)}gb · ${sys.recommended_label}` : "local · qwen · qlora"}
             </span>
+            <button
+              onClick={() => setShowProjects(true)}
+              aria-label="Your projects"
+              title="Your projects"
+              className="text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <FolderOpen className="size-4" />
+            </button>
             <Link
               href="/admin"
               aria-label="Admin settings"
@@ -158,6 +211,8 @@ export default function Home() {
           </div>
         </div>
       </header>
+
+      {showProjects && <ProjectsPanel onClose={() => setShowProjects(false)} onOpen={openProject} />}
 
       <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-4">
         <div className="flex-1 space-y-5 py-8">
@@ -1227,4 +1282,146 @@ function parseCsv(text: string): DatasetRow[] {
     if (inp) out.push({ input: inp, target: tgt });
   }
   return out;
+}
+
+// --------------------------------------------------------- projects panel
+function fmtRunScore(v: number | null | undefined, task?: string): string {
+  if (v == null) return "—";
+  if (task === "classification" || v <= 1) return `${Math.round(v * 100)}%`;
+  return `${v}`;
+}
+
+function ProjectsPanel({ onClose, onOpen }: { onClose: () => void; onOpen: (p: ProjectDetail) => void }) {
+  const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
+  const [detail, setDetail] = useState<Record<string, ProjectDetail>>({});
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [judging, setJudging] = useState<string | null>(null);
+  const [judged, setJudged] = useState<Record<string, JudgeResult>>({});
+
+  useEffect(() => {
+    listProjects().then(setProjects);
+  }, []);
+
+  async function toggle(id: string) {
+    if (expanded === id) {
+      setExpanded(null);
+      return;
+    }
+    setExpanded(id);
+    if (!detail[id]) {
+      const d = await getProjectDetail(id);
+      if (d) setDetail((m) => ({ ...m, [id]: d }));
+    }
+  }
+
+  async function score(runName: string) {
+    setJudging(runName);
+    const res = await judgeRun(runName);
+    setJudged((m) => ({ ...m, [runName]: res }));
+    setJudging(null);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div
+        className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-lg border bg-background shadow-lg"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b p-3">
+          <div>
+            <div className="text-sm font-medium">Your projects</div>
+            <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+              reopen a project · see versions · score old runs
+            </div>
+          </div>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+            <X className="size-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-3">
+          {projects === null ? (
+            <div className="font-mono text-xs text-muted-foreground">loading…</div>
+          ) : projects.length === 0 ? (
+            <div className="text-sm text-muted-foreground">No projects yet — describe one in the chat to start.</div>
+          ) : (
+            <div className="space-y-2">
+              {projects.map((p) => {
+                const d = detail[p.id];
+                const open = expanded === p.id;
+                return (
+                  <div key={p.id} className="rounded-lg border">
+                    <button onClick={() => toggle(p.id)} className="flex w-full items-center gap-2 p-3 text-left">
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">{p.name}</span>
+                        <span className="block font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                          {p.task_type} · {p.status}
+                          {p.updated_at ? ` · ${p.updated_at.slice(0, 10)}` : ""}
+                        </span>
+                      </span>
+                      <span className="font-mono text-xs text-muted-foreground">{open ? "▾" : "▸"}</span>
+                    </button>
+                    {open && (
+                      <div className="border-t p-3">
+                        {!d ? (
+                          <div className="font-mono text-xs text-muted-foreground">loading…</div>
+                        ) : (
+                          <>
+                            {d.goal && <div className="mb-2 text-xs text-muted-foreground">{d.goal}</div>}
+                            {(d.runs ?? []).length > 0 && (
+                              <div className="mb-2 space-y-1">
+                                <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                                  Versions
+                                </div>
+                                {(d.runs ?? []).map((r) => {
+                                  const j = judged[r.run_name];
+                                  return (
+                                    <div key={r.run_name} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
+                                      <span className="font-mono">v{r.version ?? "?"}</span>
+                                      <span className="font-mono text-muted-foreground">{r.run_name}</span>
+                                      <span className="text-muted-foreground">
+                                        {fmtRunScore(r.before, r.task)} → {fmtRunScore(r.after, r.task)}
+                                      </span>
+                                      {r.task !== "classification" && (
+                                        <button
+                                          onClick={() => score(r.run_name)}
+                                          disabled={judging === r.run_name}
+                                          className="rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                                        >
+                                          {judging === r.run_name ? "scoring…" : "score replies"}
+                                        </button>
+                                      )}
+                                      {j &&
+                                        (j.error ? (
+                                          <span className="text-destructive">{j.error}</span>
+                                        ) : (
+                                          <span>
+                                            judged: <b>{j.before_avg ?? "—"}</b> → <b>{j.after_avg ?? "—"}</b> /10 (n=
+                                            {j.n})
+                                          </span>
+                                        ))}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                            <div className="mt-2 flex items-center gap-2">
+                              <Button size="sm" onClick={() => onOpen(d)}>
+                                Open in chat
+                              </Button>
+                              {judging && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }

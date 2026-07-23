@@ -325,6 +325,47 @@ def delete_run_ep(run_name: str):
     return {"deleted": deploy.delete_run(run_name)}
 
 
+@app.post("/api/runs/{run_name}/judge")
+def judge_run_ep(run_name: str):
+    """Score a finished generation run's STORED held-out samples with the LLM judge
+    (no GPU / model load — pure API calls). Fills before/after judge scores into
+    report.json so old unscored runs get real numbers retroactively."""
+    rep_path = pathlib.Path(Config().output_root) / run_name / "report.json"
+    if not rep_path.exists():
+        return JSONResponse({"error": "no report for that run"}, status_code=404)
+    report = json.loads(rep_path.read_text(encoding="utf-8"))
+    if report.get("task") == "classification":
+        return JSONResponse({"error": "classification runs already have accuracy scores"}, status_code=400)
+    samples = report.get("samples") or []
+    if not samples:
+        return JSONResponse({"error": "no stored samples to score"}, status_code=400)
+    from finetune_studio import judge
+    cfg = Config()
+    if not judge.available(cfg):
+        return JSONResponse({"error": "no judge available — set GEMINI_API_KEY (or JUDGE_API_KEY) in .env"},
+                            status_code=400)
+    b_scores, a_scores, scored = [], [], []
+    for s in samples:
+        b = judge.score_reply(cfg, s.get("input", ""), s.get("base", ""))
+        a = judge.score_reply(cfg, s.get("input", ""), s.get("tuned", ""))
+        if b is not None:
+            b_scores.append(b)
+        if a is not None:
+            a_scores.append(a)
+        scored.append({**s, "base_score": b, "tuned_score": a})
+
+    def _avg(xs):
+        return round(sum(xs) / len(xs), 2) if xs else None
+
+    report.setdefault("before", {})["avg_judge_score"] = _avg(b_scores)
+    report.setdefault("after", {})["avg_judge_score"] = _avg(a_scores)
+    report["samples"] = scored
+    report["judged_n"] = len(scored)
+    rep_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return {"run_name": run_name, "before_avg": _avg(b_scores), "after_avg": _avg(a_scores),
+            "n": len(scored), "samples": scored}
+
+
 @app.post("/api/train")
 def start_train(req: TrainReq):
     try:
