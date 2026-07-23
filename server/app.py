@@ -19,7 +19,7 @@ import asyncio
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from fastapi import FastAPI, WebSocket
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -480,6 +480,12 @@ def agent_ep(req: AgentReq):
         return JSONResponse({"error": f"agent error: {e}"}, status_code=500)
 
 
-# Serve the legacy vanilla UI (web/) at the site root. The primary UI is the
-# Next.js + shadcn app in webui/ (run separately on :3000).
-app.mount("/", StaticFiles(directory=str(WEB), html=True), name="web")
+# The real app is the Next.js site on :3000 — anyone opening :8000 out of habit
+# gets bounced there instead of seeing the old dark UI and thinking nothing changed.
+@app.get("/")
+def root_redirect():
+    return RedirectResponse("http://localhost:3000")
+
+
+# Legacy vanilla UI kept reachable at /legacy (assets resolve relatively).
+app.mount("/legacy", StaticFiles(directory=str(WEB), html=True), name="web")
