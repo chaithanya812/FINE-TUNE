@@ -273,3 +273,25 @@ export async function judgeRun(runName: string): Promise<JudgeResult> {
     return { error: "backend unreachable" };
   }
 }
+
+export type CompareSide = {
+  run_name: string;
+  report?: {
+    task?: string;
+    before?: { accuracy?: number | null; avg_judge_score?: number | null };
+    after?: { accuracy?: number | null; avg_judge_score?: number | null };
+  } | null;
+};
+
+export async function compareRuns(a: string, b: string): Promise<{ a: CompareSide; b: CompareSide } | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/runs/compare`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ a, b }),
+    });
+    return res.json();
+  } catch {
+    return null;
+  }
+}

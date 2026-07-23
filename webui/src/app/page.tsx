@@ -1,1427 +1,287 @@
-"use client";
-
-import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Settings, Download, Pencil, Plus, Trash2, X, Cloud, Upload, FolderOpen, Loader2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import {
-  callAgent,
-  cancelJob,
-  chatWithModel,
-  getSystem,
-  getTemplates,
-  getDatasetFull,
-  saveDataset,
-  colabDownloadUrl,
-  getProject,
-  listProjects,
-  getProjectDetail,
-  judgeRun,
-  wsUrl,
-} from "@/lib/api";
-import type {
-  PlanData,
-  DataStats,
-  ScoreCard,
-  DeployInfo,
-  SystemInfo,
-  Template,
-  DatasetRow,
-  ProjectSummary,
-  ProjectDetail,
-  JudgeResult,
-} from "@/lib/api";
+  Split,
+  MessageCircleHeart,
+  Braces,
+  Feather,
+  Sigma,
+  Table2,
+  Activity,
+  ShieldCheck,
+  Scale,
+  NotebookPen,
+  GitBranch,
+  Settings2,
+  Star,
+  ArrowRight,
+} from "lucide-react";
 
-type Msg = { kind: "msg"; role: "user" | "assistant"; content: string };
-type Training = { kind: "training"; jobId: string };
-type PlanItem = { kind: "plan"; plan: PlanData };
-type DataItem = {
-  kind: "data";
-  stats: DataStats;
-  preview: { input: string; target: string }[];
-  projectId?: string;
-  datasetId?: string;
-};
-type ScoreItem = { kind: "score"; card: ScoreCard };
-type DeployItem = { kind: "deploy"; info: DeployInfo };
-type Item = Msg | Training | PlanItem | DataItem | ScoreItem | DeployItem;
+// Odoo-inspired marketing landing. The actual app lives at /chat.
+const PLUM = "#714B67";
 
-type Sample = {
-  input: string;
-  gold?: string;
-  base: string;
-  tuned: string;
-  base_ok?: boolean;
-  tuned_ok?: boolean;
-};
-
-type PerClass = { label: string; support: number; base_acc: number; tuned_acc: number };
-
-type Report = {
-  task: string;
-  before: { accuracy?: number; macro_f1?: number; avg_judge_score?: number | null; n?: number };
-  after: { accuracy?: number; macro_f1?: number; avg_judge_score?: number | null; n?: number };
-  delta_accuracy?: number;
-  delta_judge?: number | null;
-  samples?: Sample[];
-  per_class?: PerClass[];
-  labels?: string[];
-};
-
-type TrainSample = { input: string; label: string };
-
-type Status = "running" | "done" | "error" | "stopped";
-
-const EXAMPLES = [
-  "Build a customer-support bot that sorts messages by intent",
-  "Make a tone rewriter that turns blunt text polite",
-  "Create a data extractor that pulls fields into JSON",
+const TILES = [
+  { icon: Split, label: "Router", color: "text-rose-500", t: "router" },
+  { icon: MessageCircleHeart, label: "Assistant", color: "text-purple-500", t: "assistant" },
+  { icon: Braces, label: "Extractor", color: "text-emerald-500", t: "extractor" },
+  { icon: Feather, label: "Rewriter", color: "text-sky-500", t: "rewriter" },
+  { icon: Sigma, label: "Reasoner", color: "text-amber-500", t: "reasoner" },
+  { icon: Table2, label: "Data editor", color: "text-teal-500" },
+  { icon: Activity, label: "Live training", color: "text-orange-500" },
+  { icon: ShieldCheck, label: "Auto-test", color: "text-green-600" },
+  { icon: Scale, label: "LLM judge", color: "text-indigo-500" },
+  { icon: NotebookPen, label: "Colab export", color: "text-yellow-600" },
+  { icon: GitBranch, label: "Versions", color: "text-fuchsia-500" },
+  { icon: Settings2, label: "Admin", color: "text-slate-500" },
 ];
 
-export default function Home() {
-  const [items, setItems] = useState<Item[]>([]);
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [projectId, setProjectId] = useState<string | null>(null);
-  const [sys, setSys] = useState<SystemInfo | null>(null);
-  const [templates, setTemplates] = useState<Template[]>([]);
-  const endRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [items, busy]);
-
-  useEffect(() => {
-    getSystem().then(setSys);
-    getTemplates().then(setTemplates);
-  }, []);
-
-  function pickTemplate(t: Template) {
-    send(
-      `I want to build a ${t.title}. ${t.what_it_does} Guide me step by step, and make sure we collect enough good training data for a model that actually works.`,
-    );
-  }
-
-  const [showProjects, setShowProjects] = useState(false);
-
-  async function openProject(p: ProjectDetail) {
-    setShowProjects(false);
-    setProjectId(p.id);
-    const add: Item[] = [];
-    let dataNote = "";
-    if (p.dataset_id) {
-      const d = await getDatasetFull(p.id, p.dataset_id);
-      if (d) {
-        dataNote = ` ${d.n} training examples are loaded — open **View & edit all** on the data card to review or change them.`;
-        add.push({
-          kind: "data",
-          stats: d.meta,
-          preview: (d.rows ?? []).slice(0, 4),
-          projectId: p.id,
-          datasetId: p.dataset_id,
-        });
-      }
-    }
-    const runNote = p.active_run
-      ? ` Latest trained version: \`${p.active_run}\`.`
-      : " No trained version yet.";
-    add.unshift({
-      kind: "msg",
-      role: "assistant",
-      content: `Resumed **${p.name}** (${p.task_type}).${dataNote}${runNote} Tell me what you'd like to do next — generate more data, retrain, test it, or deploy.`,
-    });
-    setItems(add);
-  }
-
-  async function send(text?: string) {
-    const content = (text ?? input).trim();
-    if (!content || busy) return;
-    setInput("");
-    const history = items
-      .filter((i): i is Msg => i.kind === "msg")
-      .map((i) => ({ role: i.role, content: i.content }));
-    setItems((x) => [...x, { kind: "msg", role: "user", content }]);
-    setBusy(true);
-    try {
-      const res = await callAgent([...history, { role: "user", content }], projectId);
-      if (res.error) {
-        setItems((x) => [...x, { kind: "msg", role: "assistant", content: "⚠ " + res.error }]);
-      } else {
-        if (res.project_id) setProjectId(res.project_id);
-        const add: Item[] = [{ kind: "msg", role: "assistant", content: res.reply }];
-        for (const a of res.actions ?? []) {
-          if (a.type === "training_started" && a.job_id) add.push({ kind: "training", jobId: a.job_id });
-          else if (a.type === "plan" && a.plan) add.push({ kind: "plan", plan: a.plan });
-          else if (a.type === "data_generated" && a.stats)
-            add.push({
-              kind: "data",
-              stats: a.stats,
-              preview: a.preview ?? [],
-              projectId: a.project_id,
-              datasetId: a.dataset_id,
-            });
-          else if (a.type === "autotest" && a.card) add.push({ kind: "score", card: a.card });
-          else if (a.type === "deploy" && a.info) add.push({ kind: "deploy", info: a.info });
-        }
-        // A fresh plan replaces any earlier plan card (no stacked duplicates).
-        const hasPlan = add.some((it) => it.kind === "plan");
-        setItems((x) => [...(hasPlan ? x.filter((it) => it.kind !== "plan") : x), ...add]);
-      }
-    } catch {
-      setItems((x) => [
-        ...x,
-        { kind: "msg", role: "assistant", content: "⚠ Couldn't reach the backend. Is it running on :8000?" },
-      ]);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const empty = items.length === 0;
-
+export default function Landing() {
   return (
-    <div className="flex flex-1 flex-col">
-      <header className="border-b">
-        <div className="mx-auto flex max-w-2xl items-center justify-between px-4 py-4">
-          <div className="flex items-center gap-2">
+    <div className="flex flex-1 flex-col bg-background">
+      {/* ---------------------------------------------------------- nav */}
+      <header className="sticky top-0 z-40 border-b bg-background/85 backdrop-blur">
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
+          <Link href="/" className="flex items-center gap-2">
             <div className="h-5 w-5 rounded-sm bg-foreground" />
             <span className="text-sm font-semibold tracking-tight">Fine-Tune Studio</span>
-          </div>
+          </Link>
+          <nav className="hidden items-center gap-6 text-sm text-muted-foreground sm:flex">
+            <a href="#apps" className="transition-colors hover:text-foreground">Apps</a>
+            <a href="#why" className="transition-colors hover:text-foreground">Why fine-tune</a>
+            <a href="#how" className="transition-colors hover:text-foreground">How it works</a>
+            <a
+              href="https://github.com/chaithanya812/FINE-TUNE"
+              target="_blank"
+              rel="noreferrer"
+              className="transition-colors hover:text-foreground"
+            >
+              GitHub
+            </a>
+          </nav>
           <div className="flex items-center gap-3">
-            <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-              {sys?.gpu?.cuda ? `${sys.gpu.total_gb.toFixed(0)}gb · ${sys.recommended_label}` : "local · qwen · qlora"}
-            </span>
-            <button
-              onClick={() => setShowProjects(true)}
-              aria-label="Your projects"
-              title="Your projects"
-              className="text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <FolderOpen className="size-4" />
-            </button>
+            <Link href="/admin" className="hidden text-sm text-muted-foreground transition-colors hover:text-foreground sm:block">
+              Admin
+            </Link>
             <Link
-              href="/admin"
-              aria-label="Admin settings"
-              className="text-muted-foreground transition-colors hover:text-foreground"
+              href="/chat"
+              className="rounded-md px-3.5 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+              style={{ backgroundColor: PLUM }}
             >
-              <Settings className="size-4" />
+              Try it free
             </Link>
           </div>
         </div>
       </header>
 
-      {showProjects && <ProjectsPanel onClose={() => setShowProjects(false)} onOpen={openProject} />}
-
-      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-4">
-        <div className="flex-1 space-y-5 py-8">
-          {empty && (
-            <div className="mt-12 flex flex-col items-center text-center">
-              <h1 className="text-2xl font-semibold tracking-tight">What kind of model do you want?</h1>
-              <p className="mt-2 max-w-md text-sm text-muted-foreground">
-                Pick the shape of the thing you&apos;re building. I&apos;ll help you collect good data, train
-                it, and prove — with real held-out examples — whether it actually got better.
-              </p>
-              <p className="mt-2 max-w-md text-xs text-muted-foreground/80">
-                Reality check: a small local model won&apos;t be a general genius like Gemini. The win is that it{" "}
-                <b>beats the big models on your one specific job</b> — free, private, and fast.
-              </p>
-              {sys?.badge && (
-                <div className="mt-4 inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs text-muted-foreground">
-                  <span className={`h-1.5 w-1.5 rounded-full ${sys.gpu.cuda ? "bg-green-500" : "bg-amber-500"}`} />
-                  {sys.badge}
-                  {!sys.gpu.cuda && " · use the Colab path for training"}
-                </div>
-              )}
-              {templates.length > 0 ? (
-                <TemplateGallery templates={templates} onPick={pickTemplate} />
-              ) : (
-                <div className="mt-6 flex w-full max-w-sm flex-col gap-2">
-                  {EXAMPLES.map((e) => (
-                    <button
-                      key={e}
-                      onClick={() => send(e)}
-                      className="rounded-md border px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                    >
-                      {e}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {items.map((it, i) => {
-            if (it.kind === "msg") return <MessageBubble key={i} role={it.role} content={it.content} />;
-            if (it.kind === "training") return <TrainingPanel key={i} jobId={it.jobId} />;
-            if (it.kind === "plan")
-              return <PlanCard key={i} plan={it.plan} onApprove={() => send("Yes — approve the plan and continue.")} />;
-            if (it.kind === "data")
-              return (
-                <DataCard
-                  key={i}
-                  stats={it.stats}
-                  preview={it.preview}
-                  projectId={it.projectId}
-                  datasetId={it.datasetId}
-                />
-              );
-            if (it.kind === "score") return <ScoreCardView key={i} card={it.card} />;
-            if (it.kind === "deploy") return <DeployCard key={i} info={it.info} />;
-            return null;
-          })}
-
-          {busy && <div className="font-mono text-xs text-muted-foreground">thinking…</div>}
-          <div ref={endRef} />
-        </div>
-
-        <div className="sticky bottom-0 bg-background pb-6 pt-2">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              send();
-            }}
-            className="flex items-center gap-2 rounded-lg border p-1.5"
-          >
-            <Input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask me to train a model…"
-              className="border-0 shadow-none focus-visible:ring-0"
-            />
-            <Button type="submit" disabled={busy || !input.trim()} size="sm">
-              Send
-            </Button>
-          </form>
-          <p className="mt-2 text-center font-mono text-[10px] text-muted-foreground">
-            training runs on your GPU · a few minutes per run
+      {/* ---------------------------------------------------------- hero */}
+      <section className="relative overflow-hidden">
+        <div className="mx-auto max-w-5xl px-4 pb-24 pt-16 text-center sm:pt-24">
+          <h1 className="font-hand pop-in text-5xl font-bold leading-tight tracking-tight sm:text-7xl">
+            Your own AI model, trained on <span className="hl-swipe">your laptop</span>.
+          </h1>
+          <p className="font-hand pop-in mt-3 text-3xl text-foreground/90 sm:text-4xl" style={{ animationDelay: "120ms" }}>
+            Simple, private, yet <span className="ul-swipe">free</span>!
           </p>
-        </div>
-      </main>
-    </div>
-  );
-}
 
-function MessageBubble({ role, content }: { role: string; content: string }) {
-  if (role === "user") {
-    return (
-      <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-foreground px-4 py-2 text-sm text-background">
-          {content}
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="flex gap-3">
-      <div className="mt-1 h-5 w-5 shrink-0 rounded-sm border bg-muted" />
-      <div className="min-w-0 flex-1">
-        <Markdown text={content} />
-      </div>
-    </div>
-  );
-}
-
-function TrainingPanel({ jobId }: { jobId: string }) {
-  const [logs, setLogs] = useState<string[]>([]);
-  const [progress, setProgress] = useState<{
-    step: number;
-    max: number;
-    loss?: number;
-    eta?: number | null;
-    vram?: { used_gb: number; total_gb: number } | null;
-  }>({ step: 0, max: 0 });
-  const [report, setReport] = useState<Report | null>(null);
-  const [status, setStatus] = useState<Status>("running");
-  const [stopping, setStopping] = useState(false);
-  const [trainSamples, setTrainSamples] = useState<TrainSample[]>([]);
-  const [runName, setRunName] = useState<string | null>(null);
-
-  useEffect(() => {
-    // One socket per subscription. React StrictMode (dev) mounts the effect twice;
-    // the throwaway socket's close must NOT read as a training failure — so we only
-    // ever flip to "error" on an explicit {type:"error"} event, never on socket close.
-    let closed = false;
-    setLogs([]);
-    setProgress({ step: 0, max: 0 });
-    const ws = new WebSocket(wsUrl(jobId));
-    ws.onmessage = (e) => {
-      if (closed) return;
-      const ev = JSON.parse(e.data);
-      if (ev.type === "log") setLogs((l) => [...l.slice(-40), ev.msg]);
-      else if (ev.type === "progress")
-        setProgress({ step: ev.step, max: ev.max_steps, loss: ev.loss, eta: ev.eta_sec, vram: ev.vram });
-      else if (ev.type === "train_samples") setTrainSamples(ev.samples ?? []);
-      else if (ev.type === "result") {
-        setReport(ev.report);
-        if (ev.run_name) setRunName(ev.run_name);
-      } else if (ev.type === "done") {
-        setStatus("done");
-        if (ev.run_name) setRunName(ev.run_name);
-      } else if (ev.type === "cancelled") {
-        setStatus("stopped");
-        setLogs((l) => [...l, ev.msg]);
-      } else if (ev.type === "error") {
-        setStatus("error");
-        setLogs((l) => [...l, "Error: " + ev.msg]);
-      }
-    };
-    return () => {
-      closed = true;
-      ws.close();
-    };
-  }, [jobId]);
-
-  async function stop() {
-    setStopping(true);
-    try {
-      await cancelJob(jobId);
-    } catch {
-      /* the socket reports the real outcome; nothing to do here */
-    }
-  }
-
-  const pct = progress.max ? Math.round((progress.step / progress.max) * 100) : status === "done" ? 100 : 0;
-  const last = logs[logs.length - 1];
-  const label =
-    status === "running" ? "Training" : status === "done" ? "Trained" : status === "stopped" ? "Stopped" : "Error";
-
-  return (
-    <div className="rounded-lg border p-4">
-      <div className="flex items-center justify-between">
-        <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">{label}</span>
-        <div className="flex items-center gap-3">
-          {status === "running" && (
-            <button
-              onClick={stop}
-              disabled={stopping}
-              className="rounded border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+          <div className="pop-in mt-9 flex flex-wrap items-center justify-center gap-3" style={{ animationDelay: "220ms" }}>
+            <Link
+              href="/chat"
+              className="rounded-md px-6 py-3 text-sm font-semibold text-white shadow-sm transition-opacity hover:opacity-90"
+              style={{ backgroundColor: PLUM }}
             >
-              {stopping ? "stopping…" : "stop"}
-            </button>
-          )}
-          <span
-            className={`h-2 w-2 rounded-full ${
-              status === "running"
-                ? "animate-pulse bg-foreground"
-                : status === "done"
-                  ? "bg-foreground"
-                  : status === "stopped"
-                    ? "bg-muted-foreground"
-                    : "bg-destructive"
-            }`}
-          />
-        </div>
-      </div>
-
-      <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-muted">
-        <div className="h-full bg-foreground transition-all duration-500" style={{ width: `${pct}%` }} />
-      </div>
-      <div className="mt-2 flex justify-between font-mono text-[11px] text-muted-foreground">
-        <span>
-          {progress.max ? `step ${progress.step}/${progress.max}` : "starting…"}
-          {progress.eta != null && status === "running" ? ` · ~${fmtEta(progress.eta)} left` : ""}
-        </span>
-        <span>{progress.loss != null ? `loss ${progress.loss.toFixed(3)}` : ""}</span>
-      </div>
-
-      {progress.vram && status === "running" && (
-        <div className="mt-2">
-          <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
-            <div
-              className="h-full bg-muted-foreground transition-all"
-              style={{ width: `${Math.min(100, Math.round((progress.vram.used_gb / progress.vram.total_gb) * 100))}%` }}
-            />
-          </div>
-          <div className="mt-1 text-right font-mono text-[10px] text-muted-foreground">
-            VRAM {progress.vram.used_gb.toFixed(1)} / {progress.vram.total_gb.toFixed(1)} GB
-          </div>
-        </div>
-      )}
-
-      {last && !report && <div className="mt-2 truncate font-mono text-[11px] text-muted-foreground">› {last}</div>}
-
-      {!report && trainSamples.length > 0 && <TrainSamples samples={trainSamples} />}
-
-      {report && (
-        <>
-          <ResultCard report={report} />
-          {report.samples && report.samples.length > 0 && <ExamplesCard report={report} />}
-          {report.per_class && report.per_class.length > 0 && <PerClassCard rows={report.per_class} />}
-          {runName && <Playground runName={runName} task={report.task} />}
-        </>
-      )}
-    </div>
-  );
-}
-
-function TrainSamples({ samples }: { samples: TrainSample[] }) {
-  return (
-    <div className="mt-3 rounded-md border border-dashed p-3">
-      <div className="mb-1.5 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-        Learning from examples like
-      </div>
-      <div className="space-y-1.5">
-        {samples.map((s, i) => (
-          <div key={i} className="text-[13px] leading-snug">
-            <span className="text-muted-foreground">“{s.input}”</span>
-            <span className="text-muted-foreground"> → </span>
-            <span className="font-mono text-xs">{s.label}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-const TEST_SUGGESTIONS = ["where is my order?", "I want to cancel my subscription", "how do I get a refund?"];
-
-function ResultCard({ report }: { report: Report }) {
-  if (report.task === "classification") {
-    const before = Math.round((report.before.accuracy ?? 0) * 100);
-    const after = Math.round((report.after.accuracy ?? 0) * 100);
-    const delta = after - before;
-    return (
-      <div className="mt-4 border-t pt-4">
-        <div className="flex items-end justify-center gap-6">
-          <Stat label="Before" value={`${before}%`} muted />
-          <div className="pb-2 text-muted-foreground">→</div>
-          <Stat label="After" value={`${after}%`} />
-          <div className="pb-2 font-mono text-xs text-muted-foreground">
-            {delta >= 0 ? "+" : ""}
-            {delta} pts
-          </div>
-        </div>
-        <div className="mt-2 text-center font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-          accuracy on {report.after.n ?? "?"} held-out messages
-          {report.after.macro_f1 != null ? ` · macro-F1 ${report.after.macro_f1.toFixed(2)}` : ""}
-        </div>
-      </div>
-    );
-  }
-
-  const b = report.before.avg_judge_score;
-  const a = report.after.avg_judge_score;
-  if (a == null) {
-    return (
-      <div className="mt-4 border-t pt-4 text-center text-sm text-muted-foreground">
-        Trained. Auto-scoring wasn&apos;t available this run (judge unreachable or rate-limited) — test it
-        yourself below.
-      </div>
-    );
-  }
-  return (
-    <div className="mt-4 border-t pt-4">
-      <div className="flex items-end justify-center gap-6">
-        <Stat label="Before" value={(b ?? 0).toFixed(1)} muted />
-        <div className="pb-2 text-muted-foreground">→</div>
-        <Stat label="After" value={a.toFixed(1)} />
-        <div className="pb-2 font-mono text-xs text-muted-foreground">/ 10</div>
-      </div>
-      <div className="mt-2 text-center font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-        LLM-judged reply quality
-      </div>
-    </div>
-  );
-}
-
-function ExamplesCard({ report }: { report: Report }) {
-  const samples = (report.samples ?? []).slice(0, 6);
-  const isCls = report.task === "classification";
-  return (
-    <div className="mt-4 border-t pt-4">
-      <div className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-        Real held-out examples
-      </div>
-      <div className="space-y-2">
-        {samples.map((s, i) => (
-          <div key={i} className="rounded-md border p-2.5">
-            <div className="text-sm">{s.input}</div>
-            {isCls ? (
-              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px]">
-                <span className="text-muted-foreground">
-                  before:{" "}
-                  <span className={s.base_ok ? "text-foreground" : "text-destructive line-through"}>{s.base}</span>
-                </span>
-                <span className="text-muted-foreground">
-                  now: <span className={s.tuned_ok ? "text-foreground" : "text-destructive"}>{s.tuned}</span>
-                </span>
-                {s.gold && <span className="text-muted-foreground">correct: {s.gold}</span>}
-                <span className="ml-auto">{s.tuned_ok && !s.base_ok ? "✓ fixed" : s.tuned_ok ? "✓" : "✗"}</span>
-              </div>
-            ) : (
-              <div className="mt-1.5 space-y-1 text-[13px]">
-                <div className="text-muted-foreground">before: {s.base}</div>
-                <div>now: {s.tuned}</div>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function PerClassCard({ rows }: { rows: PerClass[] }) {
-  return (
-    <div className="mt-4 border-t pt-4">
-      <div className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-        By topic (before → after)
-      </div>
-      <div className="space-y-1.5">
-        {rows.map((r) => {
-          const before = Math.round(r.base_acc * 100);
-          const after = Math.round(r.tuned_acc * 100);
-          return (
-            <div key={r.label} className="flex items-center gap-2 text-[11px]">
-              <span className="w-36 shrink-0 truncate font-mono" title={r.label}>
-                {r.label}
-              </span>
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                <div className="h-full bg-foreground transition-all" style={{ width: `${after}%` }} />
-              </div>
-              <span className="w-20 shrink-0 text-right font-mono text-muted-foreground">
-                {before}%→{after}%
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function Playground({ runName, task }: { runName: string; task: string }) {
-  const [msg, setMsg] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [rows, setRows] = useState<{ q: string; base: string; tuned: string }[]>([]);
-
-  async function run(text?: string) {
-    const q = (text ?? msg).trim();
-    if (!q || busy) return;
-    setMsg("");
-    setBusy(true);
-    try {
-      // Sequential on a 4GB GPU: one cached model, adapter toggled on then off.
-      const tuned = await chatWithModel(runName, q, true);
-      const base = await chatWithModel(runName, q, false);
-      setRows((r) => [
-        ...r,
-        { q, base: base.reply ?? base.error ?? "—", tuned: tuned.reply ?? tuned.error ?? "—" },
-      ]);
-    } catch {
-      setRows((r) => [...r, { q, base: "—", tuned: "(couldn't reach the backend)" }]);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="mt-4 border-t pt-4">
-      <div className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Test it yourself</div>
-      {rows.length === 0 && (
-        <div className="mb-2 flex flex-wrap gap-1.5">
-          {TEST_SUGGESTIONS.map((s) => (
-            <button
-              key={s}
-              onClick={() => run(s)}
-              disabled={busy}
-              className="rounded-full border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+              Start now — It&apos;s free
+            </Link>
+            <a
+              href="#how"
+              className="rounded-md border bg-muted/50 px-6 py-3 text-sm font-medium text-foreground/80 transition-colors hover:bg-muted"
             >
-              {s}
-            </button>
-          ))}
-        </div>
-      )}
-      <div className="space-y-2">
-        {rows.map((r, i) => (
-          <div key={i} className="rounded-md border p-2.5">
-            <div className="text-sm">{r.q}</div>
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px]">
-              <span className="text-muted-foreground">before: {r.base}</span>
-              <span>→</span>
-              <span>now: {r.tuned}</span>
+              See how it works
+            </a>
+          </div>
+
+          {/* handwritten annotation + arrow, Odoo-style */}
+          <div className="pop-in mx-auto mt-6 flex max-w-xl items-start justify-end gap-1 pr-2" style={{ animationDelay: "320ms" }}>
+            <svg viewBox="0 0 60 40" className="mt-1 h-8 w-10 -scale-x-100 text-foreground/70" fill="none">
+              <path d="M55 4 C 30 8, 14 16, 8 34" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+              <path d="M4 24 L 8 35 L 18 32" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+            </svg>
+            <div className="font-hand rotate-[-3deg] text-2xl leading-tight text-foreground/85">
+              ₹0 / month —<br />runs on YOUR gpu
             </div>
           </div>
-        ))}
-        {busy && (
-          <div className="font-mono text-[11px] text-muted-foreground">running your message through both models…</div>
-        )}
-      </div>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          run();
-        }}
-        className="mt-2 flex items-center gap-2 rounded-lg border p-1.5"
-      >
-        <Input
-          value={msg}
-          onChange={(e) => setMsg(e.target.value)}
-          placeholder={task === "classification" ? "Type a customer message to classify…" : "Type a customer message…"}
-          className="border-0 shadow-none focus-visible:ring-0"
-        />
-        <Button type="submit" size="sm" disabled={busy || !msg.trim()}>
-          {busy ? "…" : "Test"}
-        </Button>
-      </form>
-    </div>
-  );
-}
-
-function Stat({ label, value, muted }: { label: string; value: string; muted?: boolean }) {
-  return (
-    <div className="text-center">
-      <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">{label}</div>
-      <div className={`text-3xl font-semibold tabular-nums ${muted ? "text-muted-foreground" : ""}`}>{value}</div>
-    </div>
-  );
-}
-
-function fmtEta(sec: number): string {
-  if (sec < 60) return `${Math.max(1, Math.round(sec))}s`;
-  const m = Math.round(sec / 60);
-  return `${m} min`;
-}
-
-function CardShell({ tag, children }: { tag: string; children: React.ReactNode }) {
-  return (
-    <div className="rounded-lg border p-4">
-      <div className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">{tag}</div>
-      {children}
-    </div>
-  );
-}
-
-function PlanCard({ plan, onApprove }: { plan: PlanData; onApprove: () => void }) {
-  return (
-    <CardShell tag="Plan — approve to continue">
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
-        <Field k="Task" v={plan.task_type} />
-        <Field k="Model" v={plan.base_model_label} />
-        <Field k="Method" v={plan.method} />
-        <Field k="Examples" v={plan.n_examples ? String(plan.n_examples) : "to be generated"} />
-        <Field k="Est. time" v={plan.est_time_min} />
-        <Field k="Runs on" v={plan.needs_colab ? "Colab (too big for 4 GB)" : "your GPU"} />
-      </div>
-      <div className="mt-3 flex justify-end">
-        <Button size="sm" onClick={onApprove}>
-          Approve &amp; continue
-        </Button>
-      </div>
-    </CardShell>
-  );
-}
-
-function Field({ k, v }: { k: string; v: string }) {
-  return (
-    <div>
-      <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">{k}</div>
-      <div>{v}</div>
-    </div>
-  );
-}
-
-function DataCard({
-  stats: initialStats,
-  preview,
-  projectId,
-  datasetId,
-}: {
-  stats: DataStats;
-  preview: { input: string; target: string }[];
-  projectId?: string;
-  datasetId?: string;
-}) {
-  const [stats, setStats] = useState<DataStats>(initialStats);
-  const [editing, setEditing] = useState(false);
-  const [did, setDid] = useState<string | undefined>(datasetId);
-  const labels = stats.classes?.map((c) => c.label) ?? [];
-  const canEdit = Boolean(projectId && did);
-
-  // Some actions omit dataset_id — recover it from the project so editing always works.
-  useEffect(() => {
-    if (!did && projectId)
-      getProject(projectId).then((p) => {
-        if (p?.dataset_id) setDid(p.dataset_id);
-      });
-  }, [did, projectId]);
-
-  return (
-    <CardShell tag="Data ready">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-        <span>
-          <b className="tabular-nums">{stats.n}</b> examples
-        </span>
-        {stats.n_classes != null && (
-          <span>
-            <b className="tabular-nums">{stats.n_classes}</b> classes
-          </span>
-        )}
-        {stats.split && (
-          <span className="text-muted-foreground">
-            split {stats.split.train}/{stats.split.val}/{stats.split.test}
-          </span>
-        )}
-        {canEdit && (
-          <button
-            onClick={() => setEditing(true)}
-            className="ml-auto inline-flex items-center gap-1 rounded border px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <Pencil className="size-3" /> View &amp; edit all {stats.n}
-          </button>
-        )}
-      </div>
-      {stats.balance_warning && (
-        <div className="mt-1.5 text-xs text-amber-600 dark:text-amber-500">⚠ {stats.balance_warning}</div>
-      )}
-      {(stats.n ?? 0) < 120 && (
-        <div className="mt-1.5 text-xs text-amber-600 dark:text-amber-500">
-          ⚠ This is a small set — good for a quick test, but add more (aim for 250+) for a bot you&apos;d actually
-          ship. You can generate more or add your own real examples in the editor.
         </div>
-      )}
-      {preview.length > 0 && (
-        <div className="mt-2 space-y-1">
-          {preview.slice(0, 4).map((r, i) => (
-            <div key={i} className="text-[13px] leading-snug">
-              <span className="text-muted-foreground">“{r.input}”</span>
-              <span className="text-muted-foreground"> → </span>
-              <span className="font-mono text-xs">{r.target}</span>
-            </div>
-          ))}
+        {/* curved divider */}
+        <div className="relative h-20">
+          <div className="absolute left-1/2 top-0 h-[600px] w-[160%] -translate-x-1/2 rounded-[100%] bg-muted/60" />
         </div>
-      )}
-      {projectId && <ScaleUp projectId={projectId} />}
-      {editing && projectId && did && (
-        <DatasetEditor
-          projectId={projectId}
-          datasetId={did}
-          labels={labels}
-          onClose={() => setEditing(false)}
-          onSaved={(s) => setStats((prev) => ({ ...prev, ...s }))}
-        />
-      )}
-    </CardShell>
-  );
-}
+      </section>
 
-function ScoreCardView({ card }: { card: ScoreCard }) {
-  const pill = (v: string) =>
-    v === "correct" ? "text-foreground" : v === "partial" ? "text-amber-600 dark:text-amber-500" : "text-destructive";
-  return (
-    <CardShell tag="Auto-test — 10 hard cases">
-      <div className="flex items-baseline gap-3">
-        <div className="text-2xl font-semibold tabular-nums">
-          {card.correct}/{card.total}
-        </div>
-        <div className="text-sm text-muted-foreground">{card.verdict}</div>
-      </div>
-      <div className="mt-2 space-y-1.5">
-        {card.results.slice(0, 6).map((r, i) => (
-          <div key={i} className="rounded-md border p-2 text-[13px]">
-            <div>{r.input}</div>
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 font-mono text-[11px]">
-              <span className={pill(r.verdict)}>{r.verdict}</span>
-              {r.expected && <span className="text-muted-foreground">expected: {r.expected}</span>}
-              <span className="text-muted-foreground">got: {r.got}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-    </CardShell>
-  );
-}
-
-function DeployCard({ info }: { info: DeployInfo }) {
-  const [tab, setTab] = useState<"lmstudio" | "api" | "gguf">("lmstudio");
-  return (
-    <CardShell tag="Deploy your model">
-      <div className="text-sm">
-        Adapter <b>{info.size_mb} MB</b> · base {info.base_model.split("/").pop()}
-      </div>
-      <div className="mt-1 flex flex-wrap gap-2">
-        <a
-          className="rounded border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          href={`${apiBase()}/api/runs/${info.run_name}/download`}
-        >
-          ↓ Download adapter (.zip)
-        </a>
-        {(["lmstudio", "api", "gguf"] as const).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`rounded border px-2.5 py-1 text-xs transition-colors ${
-              tab === t ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted"
-            }`}
-          >
-            {t === "lmstudio" ? "LM Studio" : t === "api" ? "API" : "GGUF"}
-          </button>
-        ))}
-      </div>
-      <div className="mt-2">
-        {tab === "lmstudio" && (
-          <ol className="list-inside list-decimal space-y-0.5 text-[13px] text-muted-foreground">
-            {info.lm_studio_steps.map((s, i) => (
-              <li key={i}>{s}</li>
-            ))}
-          </ol>
-        )}
-        {tab === "api" && <Code text={info.inference_snippet} />}
-        {tab === "gguf" && <Code text={info.gguf_script} />}
-      </div>
-    </CardShell>
-  );
-}
-
-function Code({ text }: { text: string }) {
-  return (
-    <pre className="overflow-x-auto rounded-md border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed">
-      {text}
-    </pre>
-  );
-}
-
-function apiBase(): string {
-  return process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
-}
-
-// ------------------------------------------------------ lightweight markdown
-// Renders the subset the agent actually emits (**bold**, *italic*, `code`,
-// bullet/numbered lists, links) as real React nodes — no raw HTML, so it's safe.
-function safeUrl(u: string): string {
-  return /^(https?:|mailto:)/i.test(u.trim()) ? u.trim() : "#";
-}
-
-function mdInline(text: string, key: string): React.ReactNode[] {
-  const out: React.ReactNode[] = [];
-  const re = /\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\)|\*([^*]+)\*|_([^_]+)_/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  let i = 0;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) out.push(text.slice(last, m.index));
-    if (m[1] !== undefined) out.push(<strong key={`${key}-${i}`}>{m[1]}</strong>);
-    else if (m[2] !== undefined)
-      out.push(
-        <code key={`${key}-${i}`} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
-          {m[2]}
-        </code>,
-      );
-    else if (m[3] !== undefined)
-      out.push(
-        <a
-          key={`${key}-${i}`}
-          href={safeUrl(m[4])}
-          target="_blank"
-          rel="noreferrer"
-          className="underline underline-offset-2 hover:text-foreground"
-        >
-          {m[3]}
-        </a>,
-      );
-    else if (m[5] !== undefined) out.push(<em key={`${key}-${i}`}>{m[5]}</em>);
-    else if (m[6] !== undefined) out.push(<em key={`${key}-${i}`}>{m[6]}</em>);
-    last = m.index + m[0].length;
-    i++;
-  }
-  if (last < text.length) out.push(text.slice(last));
-  return out;
-}
-
-function Markdown({ text }: { text: string }) {
-  const lines = (text ?? "").replace(/\r/g, "").split("\n");
-  const blocks: React.ReactNode[] = [];
-  let i = 0;
-  const bullet = /^\s*[-*]\s+/;
-  const ordered = /^\s*\d+\.\s+/;
-  while (i < lines.length) {
-    if (!lines[i].trim()) {
-      i++;
-      continue;
-    }
-    if (bullet.test(lines[i])) {
-      const items: string[] = [];
-      while (i < lines.length && bullet.test(lines[i])) items.push(lines[i++].replace(bullet, ""));
-      blocks.push(
-        <ul key={`b${i}`} className="ml-4 list-disc space-y-0.5">
-          {items.map((it, j) => (
-            <li key={j}>{mdInline(it, `b${i}-${j}`)}</li>
-          ))}
-        </ul>,
-      );
-      continue;
-    }
-    if (ordered.test(lines[i])) {
-      const items: string[] = [];
-      while (i < lines.length && ordered.test(lines[i])) items.push(lines[i++].replace(ordered, ""));
-      blocks.push(
-        <ol key={`o${i}`} className="ml-4 list-decimal space-y-0.5">
-          {items.map((it, j) => (
-            <li key={j}>{mdInline(it, `o${i}-${j}`)}</li>
-          ))}
-        </ol>,
-      );
-      continue;
-    }
-    const para: string[] = [];
-    while (i < lines.length && lines[i].trim() && !bullet.test(lines[i]) && !ordered.test(lines[i]))
-      para.push(lines[i++]);
-    blocks.push(
-      <p key={`p${i}`}>
-        {para.map((ln, j) => (
-          <span key={j}>
-            {mdInline(ln, `p${i}-${j}`)}
-            {j < para.length - 1 ? <br /> : null}
-          </span>
-        ))}
-      </p>,
-    );
-  }
-  return <div className="space-y-2 text-sm leading-relaxed">{blocks}</div>;
-}
-
-// --------------------------------------------------------- template gallery
-function TemplateGallery({ templates, onPick }: { templates: Template[]; onPick: (t: Template) => void }) {
-  return (
-    <div className="mt-6 grid w-full gap-2 sm:grid-cols-2">
-      {templates.map((t) => (
-        <button
-          key={t.key}
-          onClick={() => onPick(t)}
-          className="flex flex-col rounded-lg border p-3 text-left transition-colors hover:bg-muted"
-        >
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm font-medium">{t.title}</span>
-            {t.needs_bigger_model && (
-              <span className="shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground">
-                bigger model
-              </span>
-            )}
-          </div>
-          <span className="mt-1 text-xs text-muted-foreground">{t.tagline}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-// --------------------------------------------------------- scale-up (Colab)
-function ScaleUp({ projectId }: { projectId: string }) {
-  return (
-    <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3">
-      <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-        Want a bigger model?
-      </span>
-      <a
-        href={colabDownloadUrl(projectId)}
-        title="Downloads a ready-to-run notebook — open it in Colab, set Runtime → T4 GPU, then Run all."
-        className="inline-flex items-center gap-1 rounded border px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-      >
-        <Download className="size-3" /> Colab notebook (Qwen 3B+)
-      </a>
-      <button
-        disabled
-        title="Coming soon — one-click managed cloud GPU training."
-        className="inline-flex cursor-not-allowed items-center gap-1 rounded border px-2 py-0.5 text-xs text-muted-foreground/40"
-      >
-        <Cloud className="size-3" /> Cloud GPU · soon
-      </button>
-    </div>
-  );
-}
-
-// --------------------------------------------------------- dataset editor
-function DatasetEditor({
-  projectId,
-  datasetId,
-  labels,
-  onClose,
-  onSaved,
-}: {
-  projectId: string;
-  datasetId: string;
-  labels: string[];
-  onClose: () => void;
-  onSaved: (stats: DataStats) => void;
-}) {
-  const [rows, setRows] = useState<DatasetRow[] | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const isClassification = labels.length > 0;
-
-  useEffect(() => {
-    getDatasetFull(projectId, datasetId).then((d) => setRows(d?.rows ?? []));
-  }, [projectId, datasetId]);
-
-  const update = (i: number, field: keyof DatasetRow, val: string) =>
-    setRows((rs) => (rs ? rs.map((r, j) => (j === i ? { ...r, [field]: val } : r)) : rs));
-  const del = (i: number) => setRows((rs) => (rs ? rs.filter((_, j) => j !== i) : rs));
-  const add = () => setRows((rs) => [...(rs ?? []), { input: "", target: labels[0] ?? "" }]);
-
-  function exportCsv() {
-    if (!rows) return;
-    const esc = (s: string) => `"${(s ?? "").replace(/"/g, '""')}"`;
-    const csv = ["input,target", ...rows.map((r) => `${esc(r.input)},${esc(r.target)}`)].join("\n");
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-    a.download = "training_data.csv";
-    a.click();
-    URL.revokeObjectURL(a.href);
-  }
-
-  async function importCsv(file: File) {
-    const text = await file.text();
-    const parsed = parseCsv(text);
-    if (parsed.length === 0) {
-      setErr("Couldn't read any rows — expected CSV with input,target columns.");
-      return;
-    }
-    setRows((rs) => [...(rs ?? []), ...parsed]);
-    setErr(null);
-    setNote(`+${parsed.length} rows imported — review below, then Save.`);
-  }
-
-  async function save() {
-    if (!rows) return;
-    setSaving(true);
-    setErr(null);
-    const res = await saveDataset(
-      projectId,
-      datasetId,
-      rows.filter((r) => r.input.trim()),
-    );
-    setSaving(false);
-    if ("error" in res) {
-      setErr(res.error);
-      return;
-    }
-    onSaved(res.stats);
-    onClose();
-  }
-
-  const distinct = rows ? new Set(rows.map((r) => r.target).filter(Boolean)).size : 0;
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-lg border bg-background shadow-lg"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b p-3">
-          <div>
-            <div className="text-sm font-medium">Edit training data</div>
-            <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-              {rows?.length ?? "…"} rows · {distinct} labels · fix mistakes, add your own real examples
-            </div>
-          </div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
-            <X className="size-4" />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-3">
-          {rows === null ? (
-            <div className="font-mono text-xs text-muted-foreground">loading all rows…</div>
-          ) : (
-            <div className="space-y-1.5">
-              {rows.map((r, i) => (
-                <div key={i} className="flex items-start gap-1.5">
-                  <Textarea
-                    value={r.input}
-                    onChange={(e) => update(i, "input", e.target.value)}
-                    rows={1}
-                    className="min-h-8 flex-1 resize-y py-1.5 text-[13px]"
-                    placeholder="input message"
-                  />
-                  <span className="pt-2 text-muted-foreground">→</span>
-                  {isClassification ? (
-                    <input
-                      list={`labels-${datasetId}`}
-                      value={r.target}
-                      onChange={(e) => update(i, "target", e.target.value)}
-                      className="h-8 w-40 rounded-md border bg-transparent px-2 font-mono text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                      placeholder="label"
-                    />
-                  ) : (
-                    <Textarea
-                      value={r.target}
-                      onChange={(e) => update(i, "target", e.target.value)}
-                      rows={1}
-                      className="min-h-8 flex-1 resize-y py-1.5 text-[13px]"
-                      placeholder="target / ideal answer"
-                    />
-                  )}
-                  <button
-                    onClick={() => del(i)}
-                    className="pt-2 text-muted-foreground transition-colors hover:text-destructive"
-                    aria-label="delete row"
+      {/* ---------------------------------------------------------- app grid */}
+      <section id="apps" className="bg-muted/60 pb-16 pt-4">
+        <div className="mx-auto max-w-4xl px-4">
+          <div className="grid grid-cols-3 gap-x-4 gap-y-8 sm:grid-cols-6">
+            {TILES.map((tile, i) => {
+              const Icon = tile.icon;
+              const card = (
+                <>
+                  <div className="float-slow mx-auto flex h-16 w-16 items-center justify-center rounded-xl border bg-background shadow-sm transition-transform group-hover:scale-105"
+                    style={{ animationDelay: `${(i % 6) * 350}ms` }}
                   >
-                    <Trash2 className="size-3.5" />
-                  </button>
-                </div>
-              ))}
-              <datalist id={`labels-${datasetId}`}>
-                {labels.map((l) => (
-                  <option key={l} value={l} />
-                ))}
-              </datalist>
-            </div>
-          )}
-        </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t p-3">
-          <div className="flex items-center gap-1.5">
-            <button
-              onClick={add}
-              className="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            >
-              <Plus className="size-3" /> Add row
-            </button>
-            <button
-              onClick={() => fileRef.current?.click()}
-              title="Append rows from a CSV file (input,target columns — header optional)"
-              className="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            >
-              <Upload className="size-3" /> Import CSV
-            </button>
-            <button
-              onClick={exportCsv}
-              className="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            >
-              <Download className="size-3" /> Export CSV
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".csv,text/csv"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) importCsv(f);
-                e.target.value = "";
-              }}
-            />
-            {note && <span className="text-xs text-muted-foreground">{note}</span>}
-          </div>
-          <div className="flex items-center gap-2">
-            {err && <span className="text-xs text-destructive">{err}</span>}
-            <Button size="sm" variant="outline" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button size="sm" onClick={save} disabled={saving || !rows}>
-              {saving ? "Saving…" : "Save changes"}
-            </Button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Minimal RFC-4180-ish CSV parser (quoted fields, "" escapes, CRLF). Maps common
-// column names to {input, target}; header row optional.
-function parseCsv(text: string): DatasetRow[] {
-  const grid: string[][] = [];
-  let field = "";
-  let row: string[] = [];
-  let inQ = false;
-  const endField = () => {
-    row.push(field);
-    field = "";
-  };
-  const endRow = () => {
-    grid.push(row);
-    row = [];
-  };
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (inQ) {
-      if (c === '"') {
-        if (text[i + 1] === '"') {
-          field += '"';
-          i++;
-        } else inQ = false;
-      } else field += c;
-    } else if (c === '"') inQ = true;
-    else if (c === ",") endField();
-    else if (c === "\n") {
-      endField();
-      endRow();
-    } else if (c !== "\r") field += c;
-  }
-  if (field.length > 0 || row.length > 0) {
-    endField();
-    endRow();
-  }
-  if (grid.length === 0) return [];
-
-  const INPUT_NAMES = ["input", "text", "message", "question", "instruction", "prompt"];
-  const TARGET_NAMES = ["target", "label", "output", "response", "answer", "completion"];
-  const head = grid[0].map((h) => h.trim().toLowerCase());
-  let ii = 0;
-  let ti = 1;
-  let start = 0;
-  if (head.some((h) => INPUT_NAMES.includes(h) || TARGET_NAMES.includes(h))) {
-    const fi = head.findIndex((h) => INPUT_NAMES.includes(h));
-    const ft = head.findIndex((h) => TARGET_NAMES.includes(h));
-    ii = fi >= 0 ? fi : ft === 0 ? 1 : 0;
-    ti = ft >= 0 ? ft : ii === 0 ? 1 : 0;
-    start = 1;
-  }
-  const out: DatasetRow[] = [];
-  for (let r = start; r < grid.length; r++) {
-    const inp = (grid[r][ii] ?? "").trim();
-    const tgt = (grid[r][ti] ?? "").trim();
-    if (inp) out.push({ input: inp, target: tgt });
-  }
-  return out;
-}
-
-// --------------------------------------------------------- projects panel
-function fmtRunScore(v: number | null | undefined, task?: string): string {
-  if (v == null) return "—";
-  if (task === "classification" || v <= 1) return `${Math.round(v * 100)}%`;
-  return `${v}`;
-}
-
-function ProjectsPanel({ onClose, onOpen }: { onClose: () => void; onOpen: (p: ProjectDetail) => void }) {
-  const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
-  const [detail, setDetail] = useState<Record<string, ProjectDetail>>({});
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [judging, setJudging] = useState<string | null>(null);
-  const [judged, setJudged] = useState<Record<string, JudgeResult>>({});
-
-  useEffect(() => {
-    listProjects().then(setProjects);
-  }, []);
-
-  async function toggle(id: string) {
-    if (expanded === id) {
-      setExpanded(null);
-      return;
-    }
-    setExpanded(id);
-    if (!detail[id]) {
-      const d = await getProjectDetail(id);
-      if (d) setDetail((m) => ({ ...m, [id]: d }));
-    }
-  }
-
-  async function score(runName: string) {
-    setJudging(runName);
-    const res = await judgeRun(runName);
-    setJudged((m) => ({ ...m, [runName]: res }));
-    setJudging(null);
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      <div
-        className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-lg border bg-background shadow-lg"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b p-3">
-          <div>
-            <div className="text-sm font-medium">Your projects</div>
-            <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-              reopen a project · see versions · score old runs
-            </div>
-          </div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
-            <X className="size-4" />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-3">
-          {projects === null ? (
-            <div className="font-mono text-xs text-muted-foreground">loading…</div>
-          ) : projects.length === 0 ? (
-            <div className="text-sm text-muted-foreground">No projects yet — describe one in the chat to start.</div>
-          ) : (
-            <div className="space-y-2">
-              {projects.map((p) => {
-                const d = detail[p.id];
-                const open = expanded === p.id;
-                return (
-                  <div key={p.id} className="rounded-lg border">
-                    <button onClick={() => toggle(p.id)} className="flex w-full items-center gap-2 p-3 text-left">
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium">{p.name}</span>
-                        <span className="block font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                          {p.task_type} · {p.status}
-                          {p.updated_at ? ` · ${p.updated_at.slice(0, 10)}` : ""}
-                        </span>
-                      </span>
-                      <span className="font-mono text-xs text-muted-foreground">{open ? "▾" : "▸"}</span>
-                    </button>
-                    {open && (
-                      <div className="border-t p-3">
-                        {!d ? (
-                          <div className="font-mono text-xs text-muted-foreground">loading…</div>
-                        ) : (
-                          <>
-                            {d.goal && <div className="mb-2 text-xs text-muted-foreground">{d.goal}</div>}
-                            {(d.runs ?? []).length > 0 && (
-                              <div className="mb-2 space-y-1">
-                                <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                                  Versions
-                                </div>
-                                {(d.runs ?? []).map((r) => {
-                                  const j = judged[r.run_name];
-                                  return (
-                                    <div key={r.run_name} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
-                                      <span className="font-mono">v{r.version ?? "?"}</span>
-                                      <span className="font-mono text-muted-foreground">{r.run_name}</span>
-                                      <span className="text-muted-foreground">
-                                        {fmtRunScore(r.before, r.task)} → {fmtRunScore(r.after, r.task)}
-                                      </span>
-                                      {r.task !== "classification" && (
-                                        <button
-                                          onClick={() => score(r.run_name)}
-                                          disabled={judging === r.run_name}
-                                          className="rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
-                                        >
-                                          {judging === r.run_name ? "scoring…" : "score replies"}
-                                        </button>
-                                      )}
-                                      {j &&
-                                        (j.error ? (
-                                          <span className="text-destructive">{j.error}</span>
-                                        ) : (
-                                          <span>
-                                            judged: <b>{j.before_avg ?? "—"}</b> → <b>{j.after_avg ?? "—"}</b> /10 (n=
-                                            {j.n})
-                                          </span>
-                                        ))}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                            <div className="mt-2 flex items-center gap-2">
-                              <Button size="sm" onClick={() => onOpen(d)}>
-                                Open in chat
-                              </Button>
-                              {judging && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    )}
+                    <Icon className={`size-7 ${tile.color}`} />
                   </div>
-                );
-              })}
-            </div>
-          )}
+                  <div className="mt-2 text-center text-xs font-medium">{tile.label}</div>
+                </>
+              );
+              return tile.t ? (
+                <Link key={tile.label} href={`/chat?t=${tile.t}`} className="group pop-in" style={{ animationDelay: `${i * 60}ms` }}>
+                  {card}
+                </Link>
+              ) : (
+                <Link key={tile.label} href="/chat" className="group pop-in" style={{ animationDelay: `${i * 60}ms` }}>
+                  {card}
+                </Link>
+              );
+            })}
+          </div>
+
+          <div className="mt-12 text-center">
+            <p className="text-lg font-semibold">Imagine one small model for every job.</p>
+            <p className="mt-1.5 text-sm text-muted-foreground">
+              Got a repetitive task? There&apos;s a specialist for that. No ML degree, no cloud bill — describe it in chat
+              and train it in minutes.
+            </p>
+            <Link href="/chat" className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium" style={{ color: PLUM }}>
+              Open the studio <ArrowRight className="size-4" />
+            </Link>
+          </div>
         </div>
-      </div>
+      </section>
+
+      {/* ---------------------------------------------------------- quote */}
+      <section className="mx-auto w-full max-w-3xl px-4 py-14">
+        <div className="relative mx-auto max-w-xl rounded-xl border bg-background p-5 shadow-sm">
+          <div className="absolute -left-2 -top-3 rotate-[-6deg] rounded bg-amber-400/90 px-6 py-2" aria-hidden />
+          <p className="relative text-sm italic">&ldquo;A specialist beats a generalist — at the one job you actually need done.&rdquo;</p>
+          <p className="relative mt-1 text-xs text-muted-foreground">— the whole point of fine-tuning</p>
+        </div>
+      </section>
+
+      {/* ---------------------------------------------------------- why */}
+      <section id="why" className="mx-auto w-full max-w-5xl px-4 pb-20">
+        <h2 className="font-hand text-center text-4xl font-bold sm:text-5xl">
+          <span className="hl-swipe">Level up</span> your models
+        </h2>
+        <p className="mx-auto mt-3 max-w-2xl text-center text-sm text-muted-foreground">
+          Why teams fine-tune: frontier APIs are brilliant generalists — but routing tickets, extracting invoices, or
+          answering on-brand doesn&apos;t need a genius. It needs a cheap, fast, private specialist that nails one task.
+        </p>
+        <div className="mt-10 grid gap-4 sm:grid-cols-3">
+          <div className="pop-in rounded-xl border p-6 text-center">
+            <div className="text-4xl font-bold tabular-nums">+67<span className="text-xl">pts</span></div>
+            <div className="mt-2 text-sm text-muted-foreground">
+              Measured on this project: held-out intent accuracy went <b>22% → 89%</b> after one ~15-minute QLoRA run on a
+              4&nbsp;GB laptop GPU.
+            </div>
+          </div>
+          <div className="pop-in rounded-xl border p-6 text-center" style={{ animationDelay: "100ms" }}>
+            <div className="text-4xl font-bold tabular-nums">~1<span className="text-xl">%</span></div>
+            <div className="mt-2 text-sm text-muted-foreground">
+              Rough serving cost of a small specialist vs a frontier API — and tuned single-digit-B models keep matching
+              far larger generalists <i>on the narrow task they were trained for</i>.
+            </div>
+          </div>
+          <div className="pop-in rounded-xl border p-6 text-center" style={{ animationDelay: "200ms" }}>
+            <div className="text-4xl font-bold tabular-nums">100<span className="text-xl">%</span></div>
+            <div className="mt-2 text-sm text-muted-foreground">
+              Private. Training and inference never leave the machine — your support logs, contracts, and customer data
+              stay yours.
+            </div>
+          </div>
+        </div>
+        <p className="mt-6 text-center text-xs text-muted-foreground">
+          Honesty built in: fine-tuning teaches <b>style, format, and behaviour — not facts</b>. Every run must beat the
+          base model <i>and</i> a good prompt on held-out data, or we tell you not to bother.
+        </p>
+      </section>
+
+      {/* ---------------------------------------------------------- how */}
+      <section id="how" className="border-t bg-muted/40 py-20">
+        <div className="mx-auto max-w-5xl px-4">
+          <h2 className="font-hand text-center text-4xl font-bold sm:text-5xl">
+            Optimized for <span className="ul-swipe">proof</span>
+          </h2>
+          <div className="mt-10 grid gap-4 sm:grid-cols-4">
+            {[
+              ["1 · Describe", "Tell the agent what you want in plain English. It clarifies whether you need to route, answer, extract, or rewrite — before building anything."],
+              ["2 · Own the data", "A teacher AI drafts hundreds of training examples. You see every row in a spreadsheet editor — fix, delete, add your own, import CSV."],
+              ["3 · Watch it train", "QLoRA on your GPU with live loss, ETA and VRAM. Stop, resume, or export a free Colab notebook for a 3–7B model."],
+              ["4 · Get proof", "Base vs good-prompt vs fine-tuned on held-out data, per-topic breakdowns, adversarial auto-tests, and an LLM judge for open-ended replies."],
+            ].map(([t, d], i) => (
+              <div key={t} className="pop-in rounded-xl border bg-background p-5" style={{ animationDelay: `${i * 90}ms` }}>
+                <div className="font-hand text-2xl font-semibold">{t}</div>
+                <p className="mt-2 text-sm text-muted-foreground">{d}</p>
+              </div>
+            ))}
+          </div>
+          <div className="mt-8 flex items-center justify-center gap-4 font-mono text-sm">
+            <span className="rounded-full border bg-background px-3 py-1 text-muted-foreground">before 22%</span>
+            <ArrowRight className="size-4 text-muted-foreground" />
+            <span className="rounded-full border bg-background px-3 py-1 font-semibold">after 89%</span>
+          </div>
+        </div>
+      </section>
+
+      {/* ---------------------------------------------------------- done right */}
+      <section className="mx-auto w-full max-w-5xl px-4 py-20">
+        <h2 className="font-hand text-4xl font-bold sm:text-5xl">
+          Fine-tuning <span className="ul-swipe">done right</span>.
+        </h2>
+        <div className="mt-8 grid gap-4 sm:grid-cols-2">
+          {[
+            ["Open source", "The whole studio is on GitHub — engine, agent, UI. Read it, fork it, point at it in an interview.", "github"],
+            ["No lock-in", "Plain files everywhere: adapters you can download, GGUF export for LM Studio/Ollama, datasets as JSONL/CSV.", null],
+            ["Honest evals", "Held-out test sets, per-class breakdowns, a good-prompt baseline, and regressions shown — never just a happy number.", null],
+            ["Fair pricing", "₹0 locally on your GPU. Bigger models ride Google Colab's free T4 via a generated Unsloth notebook.", null],
+          ].map(([t, d, g]) => (
+            <div key={t as string} className="rounded-xl border p-6">
+              <div className="text-base font-semibold">{t}</div>
+              <p className="mt-2 text-sm text-muted-foreground">{d}</p>
+              {g && (
+                <a
+                  href="https://github.com/chaithanya812/FINE-TUNE"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-4 inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+                  style={{ backgroundColor: PLUM }}
+                >
+                  <Star className="size-4" /> Star on GitHub
+                </a>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ---------------------------------------------------------- final CTA */}
+      <section className="border-t bg-muted/60 py-16 text-center">
+        <h2 className="font-hand text-5xl font-bold">Ready to train <span className="hl-swipe">yours</span>?</h2>
+        <Link
+          href="/chat"
+          className="mt-6 inline-block rounded-md px-7 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+          style={{ backgroundColor: PLUM }}
+        >
+          Start now — It&apos;s free
+        </Link>
+        <p className="mt-3 font-mono text-[11px] text-muted-foreground">
+          needs a free Gemini API key · trains on a 4 GB GPU, or free Colab for bigger models
+        </p>
+      </section>
+
+      <footer className="border-t py-6 text-center font-mono text-[11px] text-muted-foreground">
+        Fine-Tune Studio · local-first fine-tuning ·{" "}
+        <a className="underline-offset-2 hover:underline" href="https://github.com/chaithanya812/FINE-TUNE" target="_blank" rel="noreferrer">
+          github.com/chaithanya812/FINE-TUNE
+        </a>
+      </footer>
     </div>
   );
 }

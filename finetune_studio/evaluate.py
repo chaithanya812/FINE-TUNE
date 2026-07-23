@@ -99,6 +99,18 @@ def _gen_replies(model, tokenizer, inputs, task="generation") -> list[str]:
     return [_generate(model, tokenizer, build_prompt_messages(i, task, []), 120) for i in inputs]
 
 
+def _strong_prompt_messages(input_text, task) -> list[dict]:
+    """The 3rd arm of the eval: the base model with a genuinely GOOD prompt.
+    If prompting alone matches the fine-tune, the honest answer is 'don't fine-tune'."""
+    from . import tasks
+    msgs = tasks.build_prompt_messages(task, input_text, [])
+    msgs[0]["content"] += (
+        "\nBe specific, warm, and well-structured. Answer in 1-3 tight sentences that "
+        "directly solve the user's need — no filler, no generic lists."
+    )
+    return msgs
+
+
 def _judge_avg(cfg, inputs, replies):
     from .judge import score_reply
     scores = [score_reply(cfg, i, rep) for i, rep in zip(inputs, replies)]
@@ -154,18 +166,41 @@ def evaluate_base_vs_tuned(cfg, bundle, adapter_dir, progress_cb=None) -> dict:
         with model.disable_adapter():
             base_replies = _gen_replies(model, tokenizer, inputs, bundle.task)
 
+        # 3rd arm (guarded — never breaks the run): base model + a STRONG prompt.
+        # A fine-tune only counts if it beats good prompting too.
+        prompted = None
+        prompted_replies = None
+        try:
+            if progress_cb:
+                progress_cb({"phase": "eval_prompted"})
+            with model.disable_adapter():
+                prompted_replies = [
+                    _generate(model, tokenizer, _strong_prompt_messages(i, bundle.task), 120)
+                    for i in inputs
+                ]
+            prompted = {"avg_judge_score": _judge_avg(cfg, inputs, prompted_replies) if judge_on else None,
+                        "n": len(inputs)}
+        except Exception as e:
+            print(f"[eval] prompted-baseline arm skipped: {e}")
+            prompted_replies = None
+
         after = {"avg_judge_score": _judge_avg(cfg, inputs, tuned_replies) if judge_on else None,
                  "n": len(inputs), "note": note}
         before = {"avg_judge_score": _judge_avg(cfg, inputs, base_replies) if judge_on else None,
                   "n": len(inputs), "note": note}
         b, a = before["avg_judge_score"], after["avg_judge_score"]
+        samples = [{"input": i, "base": bl, "tuned": tl}
+                   for i, bl, tl in zip(inputs, base_replies, tuned_replies)]
+        if prompted_replies:
+            for s, pr in zip(samples, prompted_replies):
+                s["prompted"] = pr
         result = {
             "task": "generation",
             "before": before,
             "after": after,
+            "prompted": prompted,
             "delta_judge": (a - b) if (a is not None and b is not None) else None,
-            "samples": [{"input": i, "base": bl, "tuned": tl}
-                        for i, bl, tl in zip(inputs, base_replies, tuned_replies)][:6],
+            "samples": samples[:6],
         }
 
     # Free VRAM so the "chat with your model" panel can load afterwards.
