@@ -238,8 +238,16 @@ def data_save_ep(pid: str, did: str, req: DatasetEditReq):
     if not proj:
         return JSONResponse({"error": "project not found"}, status_code=404)
     task = proj.get("task_type", "classification")
-    rows = [{"input": str(r.get("input", "")).strip(), "target": str(r.get("target", "")).strip()}
-            for r in req.rows if str(r.get("input", "")).strip()]
+    # Keep EVERY column the user has (notes, ids, whatever) — training only reads
+    # input/target, but their spreadsheet shouldn't lose data on save.
+    rows = []
+    for r in req.rows:
+        if not str(r.get("input", "")).strip():
+            continue
+        clean = {str(k): str(v) for k, v in r.items() if str(k).strip()}
+        clean["input"] = str(r.get("input", "")).strip()
+        clean["target"] = str(r.get("target", "")).strip()
+        rows.append(clean)
     if not rows:
         return JSONResponse({"error": "no rows to save (every row needs an input)"}, status_code=400)
     from finetune_studio import dataio

@@ -5,7 +5,6 @@ import Link from "next/link";
 import { Settings, Download, Pencil, Plus, Trash2, X, Cloud, Upload, FolderOpen, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import {
   callAgent,
   cancelJob,
@@ -1055,6 +1054,12 @@ function ScaleUp({ projectId }: { projectId: string }) {
 }
 
 // --------------------------------------------------------- dataset editor
+// A real spreadsheet grid: row numbers, column headers, and DYNAMIC columns.
+// `input` and `target` are locked (they're what trains the model); every other
+// column is free — added, renamed, deleted, imported — and is saved with the
+// dataset but ignored by training.
+const LOCKED_COLS = ["input", "target"];
+
 function DatasetEditor({
   projectId,
   datasetId,
@@ -1069,6 +1074,7 @@ function DatasetEditor({
   onSaved: (stats: DataStats) => void;
 }) {
   const [rows, setRows] = useState<DatasetRow[] | null>(null);
+  const [columns, setColumns] = useState<string[]>(LOCKED_COLS);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -1076,18 +1082,72 @@ function DatasetEditor({
   const isClassification = labels.length > 0;
 
   useEffect(() => {
-    getDatasetFull(projectId, datasetId).then((d) => setRows(d?.rows ?? []));
+    getDatasetFull(projectId, datasetId).then((d) => {
+      const rs = (d?.rows ?? []) as DatasetRow[];
+      setRows(rs);
+      const extras: string[] = [];
+      for (const r of rs)
+        for (const k of Object.keys(r)) if (!LOCKED_COLS.includes(k) && !extras.includes(k)) extras.push(k);
+      setColumns([...LOCKED_COLS, ...extras]);
+    });
   }, [projectId, datasetId]);
 
-  const update = (i: number, field: keyof DatasetRow, val: string) =>
-    setRows((rs) => (rs ? rs.map((r, j) => (j === i ? { ...r, [field]: val } : r)) : rs));
-  const del = (i: number) => setRows((rs) => (rs ? rs.filter((_, j) => j !== i) : rs));
-  const add = () => setRows((rs) => [...(rs ?? []), { input: "", target: labels[0] ?? "" }]);
+  const update = (i: number, field: string, val: string) =>
+    setRows((rs) => (rs ? rs.map((r, j) => (j === i ? ({ ...r, [field]: val } as DatasetRow) : r)) : rs));
+  const delRow = (i: number) => setRows((rs) => (rs ? rs.filter((_, j) => j !== i) : rs));
+  const addRow = () =>
+    setRows((rs) => {
+      const blank = {} as DatasetRow;
+      for (const c of columns) blank[c] = "";
+      blank.target = labels[0] ?? "";
+      return [...(rs ?? []), blank];
+    });
+
+  function addColumn() {
+    const name = window.prompt("New column name (extra columns are saved with your data, but not trained on):");
+    const key = (name ?? "").trim();
+    if (!key || columns.includes(key)) return;
+    setColumns((c) => [...c, key]);
+    setRows((rs) => (rs ? rs.map((r) => ({ ...r, [key]: r[key] ?? "" }) as DatasetRow) : rs));
+  }
+
+  function renameColumn(c: string) {
+    if (LOCKED_COLS.includes(c)) return;
+    const name = window.prompt("Rename column:", c);
+    const key = (name ?? "").trim();
+    if (!key || key === c || columns.includes(key)) return;
+    setColumns((cols) => cols.map((x) => (x === c ? key : x)));
+    setRows((rs) =>
+      rs
+        ? rs.map((r) => {
+            const { [c]: v, ...rest } = r as Record<string, string>;
+            return { ...rest, [key]: v ?? "" } as DatasetRow;
+          })
+        : rs,
+    );
+  }
+
+  function delColumn(c: string) {
+    if (LOCKED_COLS.includes(c)) return;
+    setColumns((cols) => cols.filter((x) => x !== c));
+    setRows((rs) =>
+      rs
+        ? rs.map((r) => {
+            const rest = { ...(r as Record<string, string>) };
+            delete rest[c];
+            return rest as DatasetRow;
+          })
+        : rs,
+    );
+  }
 
   function exportCsv() {
     if (!rows) return;
     const esc = (s: string) => `"${(s ?? "").replace(/"/g, '""')}"`;
-    const csv = ["input,target", ...rows.map((r) => `${esc(r.input)},${esc(r.target)}`)].join("\n");
+    const csv = [
+      columns.map(esc).join(","),
+      ...rows.map((r) => columns.map((c) => esc(r[c] ?? "")).join(",")),
+    ].join("\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     a.download = "training_data.csv";
@@ -1098,13 +1158,15 @@ function DatasetEditor({
   async function importCsv(file: File) {
     const text = await file.text();
     const parsed = parseCsv(text);
-    if (parsed.length === 0) {
-      setErr("Couldn't read any rows — expected CSV with input,target columns.");
+    if (parsed.rows.length === 0) {
+      setErr("Couldn't read any rows — needs at least an input column.");
       return;
     }
-    setRows((rs) => [...(rs ?? []), ...parsed]);
+    // merge columns (union), then append rows with every column present
+    setColumns((cols) => [...cols, ...parsed.columns.filter((c) => !cols.includes(c))]);
+    setRows((rs) => [...(rs ?? []), ...parsed.rows]);
     setErr(null);
-    setNote(`+${parsed.length} rows imported — review below, then Save.`);
+    setNote(`+${parsed.rows.length} rows, ${parsed.columns.length} columns imported — review, then Save.`);
   }
 
   async function save() {
@@ -1114,7 +1176,7 @@ function DatasetEditor({
     const res = await saveDataset(
       projectId,
       datasetId,
-      rows.filter((r) => r.input.trim()),
+      rows.filter((r) => (r.input ?? "").trim()),
     );
     setSaving(false);
     if ("error" in res) {
@@ -1125,22 +1187,20 @@ function DatasetEditor({
     onClose();
   }
 
-  const distinct = rows ? new Set(rows.map((r) => r.target).filter(Boolean)).size : 0;
+  const wide = (c: string) => c === "input" || (c === "target" && !isClassification);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
       <div
-        className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-lg border bg-background shadow-lg"
+        className="flex max-h-[88vh] w-full max-w-4xl flex-col rounded-lg border bg-background shadow-lg"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b p-3">
           <div>
             <div className="text-sm font-medium">Edit training data</div>
             <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-              {rows?.length ?? "…"} rows · {distinct} labels · fix mistakes, add your own real examples
+              {rows?.length ?? "…"} rows · {columns.length} columns · <b>input</b> &amp; <b>target</b> train the
+              model — extra columns are kept, not trained
             </div>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
@@ -1148,67 +1208,117 @@ function DatasetEditor({
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-3">
+        <div className="flex-1 overflow-auto">
           {rows === null ? (
-            <div className="font-mono text-xs text-muted-foreground">loading all rows…</div>
+            <div className="p-3 font-mono text-xs text-muted-foreground">loading all rows…</div>
           ) : (
-            <div className="space-y-1.5">
-              {rows.map((r, i) => (
-                <div key={i} className="flex items-start gap-1.5">
-                  <Textarea
-                    value={r.input}
-                    onChange={(e) => update(i, "input", e.target.value)}
-                    rows={1}
-                    className="min-h-8 flex-1 resize-y py-1.5 text-[13px]"
-                    placeholder="input message"
-                  />
-                  <span className="pt-2 text-muted-foreground">→</span>
-                  {isClassification ? (
-                    <input
-                      list={`labels-${datasetId}`}
-                      value={r.target}
-                      onChange={(e) => update(i, "target", e.target.value)}
-                      className="h-8 w-40 rounded-md border bg-transparent px-2 font-mono text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                      placeholder="label"
-                    />
-                  ) : (
-                    <Textarea
-                      value={r.target}
-                      onChange={(e) => update(i, "target", e.target.value)}
-                      rows={1}
-                      className="min-h-8 flex-1 resize-y py-1.5 text-[13px]"
-                      placeholder="target / ideal answer"
-                    />
-                  )}
-                  <button
-                    onClick={() => del(i)}
-                    className="pt-2 text-muted-foreground transition-colors hover:text-destructive"
-                    aria-label="delete row"
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
-                </div>
-              ))}
-              <datalist id={`labels-${datasetId}`}>
-                {labels.map((l) => (
-                  <option key={l} value={l} />
+            <table className="w-full min-w-max border-collapse text-[13px]">
+              <thead className="sticky top-0 z-10 bg-background shadow-[0_1px_0_0_var(--border)]">
+                <tr>
+                  <th className="w-10 border-b px-2 py-2 text-right font-mono text-[10px] font-normal text-muted-foreground">
+                    #
+                  </th>
+                  {columns.map((c) => (
+                    <th key={c} className={`border-b border-l px-2 py-1.5 text-left ${wide(c) ? "min-w-[280px]" : "min-w-[150px]"}`}>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono text-xs font-semibold">{c}</span>
+                        {LOCKED_COLS.includes(c) ? (
+                          <span className="rounded-full border px-1.5 py-px font-mono text-[9px] font-normal uppercase tracking-wide text-muted-foreground">
+                            trains
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-0.5">
+                            <button
+                              onClick={() => renameColumn(c)}
+                              title="Rename column"
+                              className="text-muted-foreground/60 transition-colors hover:text-foreground"
+                            >
+                              <Pencil className="size-3" />
+                            </button>
+                            <button
+                              onClick={() => delColumn(c)}
+                              title="Delete column"
+                              className="text-muted-foreground/60 transition-colors hover:text-destructive"
+                            >
+                              <X className="size-3" />
+                            </button>
+                          </span>
+                        )}
+                      </div>
+                    </th>
+                  ))}
+                  <th className="border-b border-l px-1.5 py-1.5">
+                    <button
+                      onClick={addColumn}
+                      title="Add a column"
+                      className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10px] font-normal uppercase tracking-wide text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    >
+                      <Plus className="size-3" /> col
+                    </button>
+                  </th>
+                  <th className="w-8 border-b" />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i} className="group hover:bg-muted/30">
+                    <td className="border-b px-2 py-1.5 text-right align-top font-mono text-[10px] text-muted-foreground">
+                      {i + 1}
+                    </td>
+                    {columns.map((c) => (
+                      <td key={c} className="border-b border-l p-0 align-top">
+                        {c === "target" && isClassification ? (
+                          <input
+                            list={`labels-${datasetId}`}
+                            value={r[c] ?? ""}
+                            onChange={(e) => update(i, c, e.target.value)}
+                            className="h-8 w-full bg-transparent px-2 font-mono text-xs outline-none focus:bg-muted/60"
+                            placeholder="label"
+                          />
+                        ) : (
+                          <textarea
+                            rows={1}
+                            value={r[c] ?? ""}
+                            onChange={(e) => update(i, c, e.target.value)}
+                            className="block min-h-8 w-full resize-none bg-transparent px-2 py-1.5 leading-snug outline-none focus:bg-muted/60"
+                            placeholder={c === "input" ? "input message" : c === "target" ? "ideal answer" : ""}
+                          />
+                        )}
+                      </td>
+                    ))}
+                    <td className="border-b border-l" />
+                    <td className="border-b px-1.5 align-top">
+                      <button
+                        onClick={() => delRow(i)}
+                        aria-label="delete row"
+                        className="pt-1.5 text-muted-foreground/0 transition-colors hover:!text-destructive group-hover:text-muted-foreground"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </td>
+                  </tr>
                 ))}
-              </datalist>
-            </div>
+              </tbody>
+            </table>
           )}
+          <datalist id={`labels-${datasetId}`}>
+            {labels.map((l) => (
+              <option key={l} value={l} />
+            ))}
+          </datalist>
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t p-3">
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             <button
-              onClick={add}
+              onClick={addRow}
               className="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
               <Plus className="size-3" /> Add row
             </button>
             <button
               onClick={() => fileRef.current?.click()}
-              title="Append rows from a CSV file (input,target columns — header optional)"
+              title="Append rows from a CSV — all columns are kept; input/target-like headers map automatically"
               className="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
               <Upload className="size-3" /> Import CSV
@@ -1247,9 +1357,9 @@ function DatasetEditor({
   );
 }
 
-// Minimal RFC-4180-ish CSV parser (quoted fields, "" escapes, CRLF). Maps common
-// column names to {input, target}; header row optional.
-function parseCsv(text: string): DatasetRow[] {
+// Minimal RFC-4180-ish CSV parser (quoted fields, "" escapes, CRLF). Keeps EVERY
+// column; maps input/target-like headers onto the locked training columns.
+function parseCsv(text: string): { columns: string[]; rows: DatasetRow[] } {
   const grid: string[][] = [];
   let field = "";
   let row: string[] = [];
@@ -1282,28 +1392,44 @@ function parseCsv(text: string): DatasetRow[] {
     endField();
     endRow();
   }
-  if (grid.length === 0) return [];
+  if (grid.length === 0) return { columns: [], rows: [] };
 
   const INPUT_NAMES = ["input", "text", "message", "question", "instruction", "prompt"];
   const TARGET_NAMES = ["target", "label", "output", "response", "answer", "completion"];
-  const head = grid[0].map((h) => h.trim().toLowerCase());
-  let ii = 0;
-  let ti = 1;
+  const head = grid[0].map((h) => h.trim());
+  const lower = head.map((h) => h.toLowerCase());
+  const hasHeader = lower.some((h) => INPUT_NAMES.includes(h) || TARGET_NAMES.includes(h));
+
+  let cols: string[];
   let start = 0;
-  if (head.some((h) => INPUT_NAMES.includes(h) || TARGET_NAMES.includes(h))) {
-    const fi = head.findIndex((h) => INPUT_NAMES.includes(h));
-    const ft = head.findIndex((h) => TARGET_NAMES.includes(h));
-    ii = fi >= 0 ? fi : ft === 0 ? 1 : 0;
-    ti = ft >= 0 ? ft : ii === 0 ? 1 : 0;
+  if (hasHeader) {
+    cols = head.map((h, i) =>
+      INPUT_NAMES.includes(lower[i]) ? "input" : TARGET_NAMES.includes(lower[i]) ? "target" : h || `col${i + 1}`,
+    );
     start = 1;
+  } else {
+    cols = grid[0].map((_, i) => (i === 0 ? "input" : i === 1 ? "target" : `col${i + 1}`));
   }
-  const out: DatasetRow[] = [];
+  // de-dupe column names (e.g. two target-ish headers): first one wins the name
+  const seen = new Set<string>();
+  cols = cols.map((c) => {
+    let n = c;
+    let k = 2;
+    while (seen.has(n)) n = `${c}_${k++}`;
+    seen.add(n);
+    return n;
+  });
+  if (!cols.includes("target")) cols = [...cols, "target"];
+
+  const rows: DatasetRow[] = [];
   for (let r = start; r < grid.length; r++) {
-    const inp = (grid[r][ii] ?? "").trim();
-    const tgt = (grid[r][ti] ?? "").trim();
-    if (inp) out.push({ input: inp, target: tgt });
+    const rec = {} as DatasetRow;
+    cols.forEach((c, i) => {
+      rec[c] = (grid[r][i] ?? "").trim();
+    });
+    if ((rec.input ?? "").trim()) rows.push(rec);
   }
-  return out;
+  return { columns: cols, rows };
 }
 
 // --------------------------------------------------------- projects panel

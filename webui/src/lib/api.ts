@@ -162,7 +162,8 @@ export async function getTemplates(): Promise<Template[]> {
 }
 
 // --- Dataset viewing + editing (the spreadsheet-style editor) ---
-export type DatasetRow = { input: string; target: string };
+// input/target are what training reads; any other column rides along untouched.
+export type DatasetRow = { input: string; target: string } & Record<string, string>;
 
 export async function getDatasetFull(
   pid: string,
