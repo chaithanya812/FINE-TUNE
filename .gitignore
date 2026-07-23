@@ -30,6 +30,7 @@ finetune_colab.ipynb
 # local AI-session docs (kept out of the public repo on purpose)
 HANDOFF.md
 HANDOFF_NEXT.md
+HANDOFF_EVALS.md
 LEARNINGS_FROM_TINKER.md
 
 # tooling / OS junk
