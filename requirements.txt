@@ -1,0 +1,20 @@
+# ---------------------------------------------------------------------------
+# Install torch SEPARATELY FIRST with the CUDA build (do not use plain
+# `pip install torch`, that gives the CPU-only build):
+#
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+#
+# Then: pip install -r requirements.txt
+# ---------------------------------------------------------------------------
+transformers>=4.45
+peft>=0.13
+accelerate>=0.34
+bitsandbytes>=0.44        # 4-bit QLoRA (Windows wheels included in recent versions)
+datasets>=3.0
+scikit-learn>=1.4
+pandas>=2.0
+huggingface_hub>=0.25
+openai>=1.40             # only for the LLM-as-judge (generation task); optional
+fastapi>=0.115           # web UI backend (added in the UI step)
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9  # CSV upload in the UI

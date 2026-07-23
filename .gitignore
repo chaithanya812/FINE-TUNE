@@ -1,0 +1,37 @@
+# secrets
+.env
+.env.*
+
+# python
+.venv/
+__pycache__/
+*.pyc
+runs/
+.cache/
+
+# cloned reference repos (study-only, not part of our code)
+reference/
+
+# node / next / shadcn frontend
+node_modules/
+.next/
+out/
+dist/
+
+# per-user app data + local config (not part of the product)
+workspaces/
+settings.json
+*.log
+
+# generated artifacts
+finetune_colab.ipynb
+*_colab.ipynb
+
+# local AI-session docs (kept out of the public repo on purpose)
+HANDOFF.md
+HANDOFF_NEXT.md
+LEARNINGS_FROM_TINKER.md
+
+# tooling / OS junk
+.claude/
+Thumbs.db

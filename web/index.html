@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fine-Tune Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">◆</span>
+      <div>
+        <h1>Fine-Tune Studio</h1>
+        <p>Fine-tune a support model, then see — with real numbers — if it got better.</p>
+      </div>
+    </div>
+    <div class="gpu-chip" id="gpuChip">RTX 3050 · 4GB · QLoRA</div>
+  </header>
+
+  <main class="grid">
+    <!-- 1 · Configure -->
+    <section class="card config">
+      <h2><span class="step">1</span> Configure</h2>
+
+      <label>Base model
+        <select id="model_id">
+          <option value="Qwen/Qwen2.5-0.5B-Instruct">Qwen2.5-0.5B (fits 4GB)</option>
+          <option value="Qwen/Qwen2.5-1.5B-Instruct">Qwen2.5-1.5B (risky on 4GB)</option>
+        </select>
+      </label>
+
+      <label>Task
+        <select id="task">
+          <option value="classification">Classification — intent accuracy</option>
+          <option value="generation">Generation — reply quality (LLM judge)</option>
+        </select>
+      </label>
+
+      <label id="labelFieldRow">Label granularity
+        <select id="label_field">
+          <option value="intent">Intent (27-way, harder)</option>
+          <option value="category">Category (11-way, cleaner)</option>
+        </select>
+      </label>
+
+      <label>Method
+        <select id="mode">
+          <option value="qlora">QLoRA (4-bit)</option>
+          <option value="lora">LoRA (16-bit)</option>
+        </select>
+      </label>
+
+      <div class="row2">
+        <label>Data
+          <select id="dataset">
+            <option value="bitext">Bitext (27k, downloads)</option>
+            <option value="csv">Bundled sample (offline)</option>
+          </select>
+        </label>
+        <label>Epochs
+          <input id="epochs" type="number" value="3" min="1" max="10" step="1" />
+        </label>
+      </div>
+
+      <div class="row2">
+        <label>Train examples
+          <input id="n_train" type="number" value="2000" min="20" step="100" />
+        </label>
+        <label>Test examples
+          <input id="n_eval" type="number" value="400" min="4" step="50" />
+        </label>
+      </div>
+
+      <button id="startBtn" class="primary">▶ Start fine-tuning</button>
+      <p class="hint" id="hint">One 0.5B QLoRA run ≈ 20-40 min on your GPU.</p>
+    </section>
+
+    <!-- 2 · Train + 3 · Results -->
+    <section class="card train">
+      <h2><span class="step">2</span> Train <span id="statusPill" class="pill idle">idle</span></h2>
+
+      <div class="progress-wrap">
+        <div class="progress"><div id="bar" class="bar"></div></div>
+        <div class="progress-meta">
+          <span id="stepLabel">step 0 / 0</span>
+          <span id="lossLabel">loss —</span>
+        </div>
+        <svg id="spark" class="spark" viewBox="0 0 300 44" preserveAspectRatio="none">
+          <polyline id="sparkLine" points="" fill="none" />
+        </svg>
+      </div>
+
+      <div id="log" class="log"><div class="log-empty">Training logs will stream here…</div></div>
+
+      <!-- results card -->
+      <div id="results" class="results hidden">
+        <h3>Did it improve?</h3>
+        <div class="metric-row">
+          <div class="metric before">
+            <span class="metric-label">Base model</span>
+            <span id="beforeVal" class="metric-val">—</span>
+          </div>
+          <div class="arrow" id="deltaArrow">→</div>
+          <div class="metric after">
+            <span class="metric-label">Fine-tuned</span>
+            <span id="afterVal" class="metric-val">—</span>
+          </div>
+        </div>
+        <div id="deltaBadge" class="delta-badge">—</div>
+        <p id="resumeLine" class="resume-line"></p>
+      </div>
+    </section>
+
+    <!-- 4 · Chat -->
+    <section class="card chat hidden" id="chatCard">
+      <h2><span class="step">4</span> Try your model</h2>
+      <div class="toggle">
+        <span>Compare:</span>
+        <button class="seg active" id="segTuned" data-adapter="1">Fine-tuned</button>
+        <button class="seg" id="segBase" data-adapter="0">Base</button>
+      </div>
+      <div id="chatLog" class="chatlog"></div>
+      <div class="composer">
+        <input id="chatInput" type="text" placeholder="e.g. where is my package?" />
+        <button id="sendBtn" class="primary">Send</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
