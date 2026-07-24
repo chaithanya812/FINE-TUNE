@@ -1,0 +1,151 @@
+input,target
+"I'd like to book an appointment for a cleaning next week",book_appointment
+"Can I schedule a consultation with the dentist?",book_appointment
+"Do you have any openings this Friday afternoon?",book_appointment
+"I want to set up a check-up for my son",book_appointment
+"How do I make an appointment?",book_appointment
+"Can I come in tomorrow morning?",book_appointment
+"I'd like to reserve a slot for a whitening session",book_appointment
+"Looking to book my first visit with you",book_appointment
+"Is there availability on Monday?",book_appointment
+"I need to see the doctor as soon as possible",book_appointment
+"Can I book online or do I have to call?",book_appointment
+"Please schedule me in for a routine exam",book_appointment
+"I'd like an appointment for a root canal consult",book_appointment
+"What's the earliest you can fit me in?",book_appointment
+"Can we set up a time for next Tuesday?",book_appointment
+"I want to book a follow-up visit",book_appointment
+"Could I get an appointment this weekend?",book_appointment
+"I'm a new patient and want to schedule a visit",book_appointment
+"Can I reserve the 3pm slot on Thursday?",book_appointment
+"I'd like to come in for a filling",book_appointment
+"Book me for a hygiene appointment please",book_appointment
+"Do you take walk-ins or should I schedule ahead?",book_appointment
+"I need to set up an appointment for two people",book_appointment
+"Can I get in for an emergency visit today?",book_appointment
+"I'd like to schedule my annual check-up",book_appointment
+"Please put me down for sometime next month",book_appointment
+"I want to arrange a visit for my daughter",book_appointment
+"Looking to schedule a teeth cleaning soon",book_appointment
+"Can you fit me in before the holidays?",book_appointment
+"I would like to make a booking for a consultation",book_appointment
+"I need to cancel my appointment tomorrow",cancel_reschedule
+"Can I move my Friday booking to next week?",cancel_reschedule
+"Something came up and I have to reschedule",cancel_reschedule
+"Please cancel my 2pm slot today",cancel_reschedule
+"I won't be able to make it, can we push it back?",cancel_reschedule
+"How do I cancel an appointment I booked online?",cancel_reschedule
+"Can we change my appointment to the afternoon?",cancel_reschedule
+"I'd like to reschedule to a later date",cancel_reschedule
+"Sorry, I need to cancel and rebook for another day",cancel_reschedule
+"Can I switch my appointment to Monday instead?",cancel_reschedule
+"I have to cancel due to a scheduling conflict",cancel_reschedule
+"Please move my visit to next Thursday",cancel_reschedule
+"Can I postpone my check-up?",cancel_reschedule
+"I need to change the time of my appointment",cancel_reschedule
+"Cancel my booking please, I'll call back later",cancel_reschedule
+"Is it possible to reschedule to the morning?",cancel_reschedule
+"I want to cancel the cleaning I scheduled",cancel_reschedule
+"Can we bump my appointment by a week?",cancel_reschedule
+"I'd like to cancel and get a refund if possible",cancel_reschedule
+"Need to reschedule because my kid is sick",cancel_reschedule
+"Can I move tomorrow's slot to Saturday?",cancel_reschedule
+"Please cancel my consultation for now",cancel_reschedule
+"I have to reschedule my root canal appointment",cancel_reschedule
+"Can I change my appointment date to later this month?",cancel_reschedule
+"Sorry for the short notice but I must cancel",cancel_reschedule
+"Would like to push my visit to next month",cancel_reschedule
+"Can I cancel one of my two bookings?",cancel_reschedule
+"I need to reschedule because of a work meeting",cancel_reschedule
+"Please cancel, I found another provider",cancel_reschedule
+"Can we reschedule to a day you have openings?",cancel_reschedule
+"How much does a routine cleaning cost?",pricing
+"What are your prices for a check-up?",pricing
+"Do you have a fee schedule I can look at?",pricing
+"How much is a whitening treatment?",pricing
+"What's the cost of a filling?",pricing
+"Is the first consultation free?",pricing
+"How much would a root canal run me?",pricing
+"Do you offer any payment plans?",pricing
+"What are your rates for new patients?",pricing
+"How much do you charge for x-rays?",pricing
+"Is there a fee for last-minute cancellations?",pricing
+"What does a full exam cost?",pricing
+"How much for a set of dentures?",pricing
+"Are your prices different on weekends?",pricing
+"What's the price for seeing a specialist?",pricing
+"Do you have any discounts for students?",pricing
+"How much is a deep cleaning?",pricing
+"What would braces cost approximately?",pricing
+"Is getting a quote free of charge?",pricing
+"How much do you charge per visit?",pricing
+"What are the costs involved in an implant?",pricing
+"Do you charge extra for emergency visits?",pricing
+"How much is a night guard?",pricing
+"Can you tell me your fees before I book?",pricing
+"Are consultations billed separately from treatment?",pricing
+"How much would two cleanings cost together?",pricing
+"What's the most affordable option for a check-up?",pricing
+"Do your prices include tax?",pricing
+"How much is a follow-up appointment?",pricing
+"What are the fees for a crown?",pricing
+"What time do you open on weekdays?",hours_location
+"Where exactly are you located?",hours_location
+"Are you open on Saturdays?",hours_location
+"What's your street address?",hours_location
+"How late are you open tonight?",hours_location
+"Do you have parking on site?",hours_location
+"Which floor is your office on?",hours_location
+"Are you open during the holidays?",hours_location
+"What are your hours on Sunday?",hours_location
+"Is your clinic near the train station?",hours_location
+"Can you send me directions to your office?",hours_location
+"What time do you close today?",hours_location
+"Are you open right now?",hours_location
+"Do you have a branch downtown?",hours_location
+"Which entrance should I use when I arrive?",hours_location
+"What are your opening hours during the week?",hours_location
+"Is there wheelchair access to your building?",hours_location
+"Are you open early in the morning?",hours_location
+"How do I find your building?",hours_location
+"What's the nearest bus stop to your clinic?",hours_location
+"Do you have any evening hours?",hours_location
+"Are you closed for lunch during the day?",hours_location
+"What days of the week are you open?",hours_location
+"Is parking free at your location?",hours_location
+"Where is your practice situated?",hours_location
+"Are you open on public holidays?",hours_location
+"What time do morning appointments start?",hours_location
+"Do you have more than one location?",hours_location
+"How far are you from the city center?",hours_location
+"Are you open this coming Friday?",hours_location
+"Do you offer teeth whitening?",services
+"What services do you provide?",services
+"Do you do root canals in-house?",services
+"Can you fit dental implants?",services
+"Do you treat young children?",services
+"Do you offer orthodontics or braces?",services
+"Is sedation dentistry available?",services
+"Do you handle dental emergencies?",services
+"Can you do a deep cleaning?",services
+"Do you provide cosmetic dentistry?",services
+"Do you make custom night guards?",services
+"Can you replace a missing tooth?",services
+"Do you offer virtual consultations?",services
+"Do you do wisdom tooth extractions?",services
+"Can you fix a chipped tooth?",services
+"Do you provide full or partial dentures?",services
+"Do you offer preventive care plans?",services
+"Can you whiten badly stained teeth?",services
+"Do you do crowns and bridges?",services
+"Is teeth straightening something you offer?",services
+"Do you take care of gum disease?",services
+"Can you help with tooth sensitivity?",services
+"Do you offer same-day crowns?",services
+"Do you provide pediatric dentistry?",services
+"Can you do a full smile makeover?",services
+"Do you offer fluoride treatments?",services
+"Do you handle TMJ or jaw issues?",services
+"Can you fit veneers?",services
+"Do you provide oral cancer screenings?",services
+"Do you offer Invisalign clear aligners?",services

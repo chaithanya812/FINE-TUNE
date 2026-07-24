@@ -1185,11 +1185,20 @@ function DatasetEditor({
       setErr("Couldn't read any rows — needs at least an input column.");
       return;
     }
-    // merge columns (union), then append rows with every column present
-    setColumns((cols) => [...cols, ...parsed.columns.filter((c) => !cols.includes(c))]);
-    setRows((rs) => [...(rs ?? []), ...parsed.rows]);
+    // If the grid already has rows, let the user REPLACE them with the file (clean
+    // "bring your own data") or ADD to them. Empty grid -> just load the file.
+    const hasRows = (rows?.length ?? 0) > 0;
+    const replace =
+      !hasRows ||
+      window.confirm(
+        `Import ${parsed.rows.length} rows from the file.\n\n` +
+          `OK = replace all current rows with the file\nCancel = add them to the current rows`,
+      );
+    const fileCols = [...LOCKED_COLS, ...parsed.columns.filter((c) => !LOCKED_COLS.includes(c))];
+    setColumns((cols) => (replace ? fileCols : [...cols, ...parsed.columns.filter((c) => !cols.includes(c))]));
+    setRows((rs) => (replace ? parsed.rows : [...(rs ?? []), ...parsed.rows]));
     setErr(null);
-    setNote(`+${parsed.rows.length} rows, ${parsed.columns.length} columns imported — review, then Save.`);
+    setNote(`${replace ? "Replaced with" : "Added"} ${parsed.rows.length} rows — review, then Save.`);
   }
 
   async function save() {
