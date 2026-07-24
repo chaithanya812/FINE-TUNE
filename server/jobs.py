@@ -123,10 +123,15 @@ class JobManager:
                 if res.get("task") == "classification":
                     summary.update(before=round(res["before"]["accuracy"], 4),
                                    after=round(res["after"]["accuracy"], 4),
-                                   delta=round(res.get("delta_accuracy", 0.0), 4))
-                # Pin the run to the exact data + config that produced it, and
-                # snapshot its config/report immutably into the store.
-                store.add_run(pid, summary, dataset_version_id=cfg.dataset_id, config=asdict(cfg))
+                                   delta=round(res.get("delta_accuracy", 0.0), 4),
+                                   before_ci=[res["before"].get("ci_lo"), res["before"].get("ci_hi")],
+                                   after_ci=[res["after"].get("ci_lo"), res["after"].get("ci_hi")],
+                                   n=res["after"].get("n"),
+                                   mcnemar_p=(res.get("mcnemar_base_vs_tuned") or {}).get("p_value"))
+                # Pin the run to the exact data + config + frozen eval set that
+                # produced it, and snapshot its config/report immutably.
+                store.add_run(pid, summary, dataset_version_id=cfg.dataset_id,
+                              config=asdict(cfg), eval_set_id=res.get("eval_set_id"))
                 db.save_run_snapshot(cfg.run_name, asdict(cfg), res)
                 store.update_project(pid, status="evaluated")
 

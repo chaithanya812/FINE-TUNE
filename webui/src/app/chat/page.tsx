@@ -59,13 +59,16 @@ type Sample = {
 
 type PerClass = { label: string; support: number; base_acc: number; tuned_acc: number };
 
+type CI = { ci_lo?: number | null; ci_hi?: number | null };
 type Report = {
   task: string;
-  before: { accuracy?: number; macro_f1?: number; avg_judge_score?: number | null; n?: number };
-  after: { accuracy?: number; macro_f1?: number; avg_judge_score?: number | null; n?: number };
+  before: { accuracy?: number; macro_f1?: number; avg_judge_score?: number | null; n?: number } & CI;
+  after: { accuracy?: number; macro_f1?: number; avg_judge_score?: number | null; n?: number } & CI;
   prompted?: { avg_judge_score?: number | null; n?: number } | null;
   delta_accuracy?: number;
   delta_judge?: number | null;
+  mcnemar_base_vs_tuned?: { p_value?: number; b?: number; c?: number; n_discordant?: number } | null;
+  eval_set_id?: string | null;
   samples?: Sample[];
   per_class?: PerClass[];
   labels?: string[];
@@ -496,6 +499,9 @@ function ResultCard({ report }: { report: Report }) {
     const before = Math.round((report.before.accuracy ?? 0) * 100);
     const after = Math.round((report.after.accuracy ?? 0) * 100);
     const delta = after - before;
+    const ciLo = report.after.ci_lo != null ? Math.round(report.after.ci_lo * 100) : null;
+    const ciHi = report.after.ci_hi != null ? Math.round(report.after.ci_hi * 100) : null;
+    const mp = report.mcnemar_base_vs_tuned?.p_value;
     return (
       <div className="mt-4 border-t pt-4">
         <div className="flex items-end justify-center gap-6">
@@ -511,6 +517,14 @@ function ResultCard({ report }: { report: Report }) {
           accuracy on {report.after.n ?? "?"} held-out messages
           {report.after.macro_f1 != null ? ` · macro-F1 ${report.after.macro_f1.toFixed(2)}` : ""}
         </div>
+        {ciLo != null && (
+          <div className="mt-1 text-center font-mono text-[10px] text-muted-foreground">
+            95% CI {ciLo}–{ciHi}%
+            {mp != null && (
+              <> · vs base p={mp < 0.001 ? "<0.001" : mp.toFixed(3)} {mp < 0.05 ? "✓ significant" : "· not significant"}</>
+            )}
+          </div>
+        )}
       </div>
     );
   }
@@ -543,6 +557,11 @@ function ResultCard({ report }: { report: Report }) {
       <div className="mt-2 text-center font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
         LLM-judged reply quality{p != null ? " · tuned must beat the good prompt too" : ""}
       </div>
+      {report.after.ci_lo != null && (
+        <div className="mt-1 text-center font-mono text-[10px] text-muted-foreground">
+          95% CI {report.after.ci_lo.toFixed(1)}–{(report.after.ci_hi ?? 0).toFixed(1)} · n={report.after.n ?? "?"}
+        </div>
+      )}
     </div>
   );
 }
@@ -1464,10 +1483,18 @@ function ProjectsPanel({ onClose, onOpen }: { onClose: () => void; onOpen: (p: P
       if (af.accuracy != null) return `${Math.round(af.accuracy * 100)}%`;
       return af.avg_judge_score != null ? `${af.avg_judge_score.toFixed(1)}/10` : "unscored";
     };
-    setCmp((m) => ({
-      ...m,
-      [d.id]: res ? `${a} → ${metric(res.a)}   vs   ${b} → ${metric(res.b)}` : "couldn't compare",
-    }));
+    if (!res) {
+      setCmp((m) => ({ ...m, [d.id]: "couldn't compare" }));
+      return;
+    }
+    let text = `${a} → ${metric(res.a)}   vs   ${b} → ${metric(res.b)}`;
+    if (res.comparable === false) {
+      text += " · ⚠ not comparable (different eval sets)";
+    } else if (res.mcnemar?.p_value != null) {
+      const mp = res.mcnemar.p_value;
+      text += ` · McNemar p=${mp < 0.001 ? "<0.001" : mp.toFixed(3)}${mp < 0.05 ? " ✓ significant" : " · not significant"}`;
+    }
+    setCmp((m) => ({ ...m, [d.id]: text }));
   }
 
   async function toggle(id: string) {
@@ -1550,6 +1577,12 @@ function ProjectsPanel({ onClose, onOpen }: { onClose: () => void; onOpen: (p: P
                                       <span className="text-muted-foreground">
                                         {fmtRunScore(r.before, r.task)} → {fmtRunScore(r.after, r.task)}
                                       </span>
+                                      {r.task === "classification" && r.after_ci && r.after_ci[0] != null && (
+                                        <span className="font-mono text-[10px] text-muted-foreground">
+                                          ±CI {Math.round((r.after_ci[0] as number) * 100)}–
+                                          {Math.round((r.after_ci[1] as number) * 100)}%{r.n ? ` n=${r.n}` : ""}
+                                        </span>
+                                      )}
                                       {r.task !== "classification" && (
                                         <button
                                           onClick={() => score(r.run_name)}
@@ -1566,6 +1599,11 @@ function ProjectsPanel({ onClose, onOpen }: { onClose: () => void; onOpen: (p: P
                                           <span>
                                             judged: <b>{j.before_avg ?? "—"}</b> → <b>{j.after_avg ?? "—"}</b> /10 (n=
                                             {j.n})
+                                            {j.after_ci && j.after_ci[0] != null && (
+                                              <span className="ml-1 font-mono text-[10px] text-muted-foreground">
+                                                ±CI {(j.after_ci[0] as number).toFixed(1)}–{(j.after_ci[1] as number).toFixed(1)}
+                                              </span>
+                                            )}
                                           </span>
                                         ))}
                                     </div>

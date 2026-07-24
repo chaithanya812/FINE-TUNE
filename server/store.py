@@ -105,17 +105,18 @@ def delete_project(pid: str) -> bool:
 
 
 def add_run(pid: str, run_record: dict, dataset_version_id: str | None = None,
-            config: dict | None = None) -> dict | None:
-    """Append a run PINNED to the data + config that produced it, mark it active.
+            config: dict | None = None, eval_set_id: str | None = None) -> dict | None:
+    """Append a run PINNED to the data + config + eval set that produced it, mark active.
 
-    `dataset_version_id` and `config` are new optional pins (jobs.py passes them);
-    without them the run is still recorded, just without provenance (legacy calls).
+    `dataset_version_id`, `config`, and `eval_set_id` are the provenance pins
+    (jobs.py passes them); without them the run is still recorded, just without
+    full provenance (legacy calls).
     """
     if db.fetch_project(pid) is None:
         return None
     run_name = run_record.get("run_name") or ("run_" + uuid.uuid4().hex[:8])
     db.add_run(pid, run_name, dataset_version_id=dataset_version_id, config=config,
-               metrics=run_record)
+               eval_set_id=eval_set_id, metrics=run_record)
     db.update_project_fields(pid, {"active_run": run_name})
     return _legacy_project(pid)
 

@@ -366,12 +366,18 @@ def judge_run_ep(run_name: str):
     def _avg(xs):
         return round(sum(xs) / len(xs), 2) if xs else None
 
-    report.setdefault("before", {})["avg_judge_score"] = _avg(b_scores)
-    report.setdefault("after", {})["avg_judge_score"] = _avg(a_scores)
+    from finetune_studio import stats
+    bci = stats.mean_ci(b_scores) if b_scores else {}
+    aci = stats.mean_ci(a_scores) if a_scores else {}
+    report.setdefault("before", {}).update(avg_judge_score=_avg(b_scores),
+                                           ci_lo=bci.get("lo"), ci_hi=bci.get("hi"), n=len(b_scores))
+    report.setdefault("after", {}).update(avg_judge_score=_avg(a_scores),
+                                          ci_lo=aci.get("lo"), ci_hi=aci.get("hi"), n=len(a_scores))
     report["samples"] = scored
     report["judged_n"] = len(scored)
     rep_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return {"run_name": run_name, "before_avg": _avg(b_scores), "after_avg": _avg(a_scores),
+            "before_ci": [bci.get("lo"), bci.get("hi")], "after_ci": [aci.get("lo"), aci.get("hi")],
             "n": len(scored), "samples": scored}
 
 

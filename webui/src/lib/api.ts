@@ -225,6 +225,11 @@ export type RunRecord = {
   before?: number | null;
   after?: number | null;
   delta?: number | null;
+  before_ci?: [number | null, number | null] | null;
+  after_ci?: [number | null, number | null] | null;
+  n?: number | null;
+  eval_set_id?: string | null;
+  mcnemar_p?: number | null;
   created_at?: string;
 };
 
@@ -262,6 +267,8 @@ export type JudgeResult = {
   run_name?: string;
   before_avg?: number | null;
   after_avg?: number | null;
+  before_ci?: [number | null, number | null];
+  after_ci?: [number | null, number | null];
   n?: number;
   error?: string;
 };
@@ -282,9 +289,19 @@ export type CompareSide = {
     before?: { accuracy?: number | null; avg_judge_score?: number | null };
     after?: { accuracy?: number | null; avg_judge_score?: number | null };
   } | null;
+  accuracy_ci?: { accuracy?: number; lo?: number; hi?: number; n?: number };
 };
 
-export async function compareRuns(a: string, b: string): Promise<{ a: CompareSide; b: CompareSide } | null> {
+export type CompareResult = {
+  a: CompareSide;
+  b: CompareSide;
+  comparable?: boolean;
+  note?: string;
+  n_shared?: number;
+  mcnemar?: { b?: number; c?: number; n_discordant?: number; p_value?: number; statistic?: number };
+};
+
+export async function compareRuns(a: string, b: string): Promise<CompareResult | null> {
   try {
     const res = await fetch(`${API_BASE}/api/runs/compare`, {
       method: "POST",

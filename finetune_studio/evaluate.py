@@ -51,10 +51,13 @@ def _classify_preds(model, tokenizer, bundle) -> list[str]:
 
 def _cls_metrics(golds, preds, labels) -> dict:
     from sklearn.metrics import accuracy_score, f1_score
+    from . import stats
+    ci = stats.accuracy_ci([p == g for p, g in zip(preds, golds)])
     return {
         "accuracy": float(accuracy_score(golds, preds)),
         "macro_f1": float(f1_score(golds, preds, average="macro", labels=labels, zero_division=0)),
         "n": len(golds),
+        "ci_lo": ci["lo"], "ci_hi": ci["hi"],
     }
 
 
@@ -118,6 +121,20 @@ def _judge_avg(cfg, inputs, replies):
     return (sum(scores) / len(scores)) if scores else None
 
 
+def _judge_block(cfg, inputs, replies, judge_on, note=None) -> dict:
+    """Mean judge score WITH a bootstrap CI (Phase 2) for one arm's replies."""
+    if not judge_on:
+        return {"avg_judge_score": None, "n": len(inputs), "note": note}
+    from .judge import score_reply
+    from . import stats
+    scores = [s for s in (score_reply(cfg, i, r) for i, r in zip(inputs, replies)) if s is not None]
+    if not scores:
+        return {"avg_judge_score": None, "n": len(inputs), "note": note}
+    ci = stats.mean_ci(scores)
+    return {"avg_judge_score": round(ci["mean"], 2), "ci_lo": ci["lo"], "ci_hi": ci["hi"],
+            "n": len(inputs), "scored_n": len(scores), "note": note}
+
+
 # ------------------------------------------------------------------------- driver
 def evaluate_base_vs_tuned(cfg, bundle, adapter_dir, progress_cb=None) -> dict:
     """Score base (adapter off) vs tuned (adapter on) on the same eval set, and
@@ -143,14 +160,22 @@ def evaluate_base_vs_tuned(cfg, bundle, adapter_dir, progress_cb=None) -> dict:
 
         after = _cls_metrics(golds, tuned_preds, bundle.labels)
         before = _cls_metrics(golds, base_preds, bundle.labels)
+        from . import stats
+        base_ok = [b == g for b, g in zip(base_preds, golds)]
+        tuned_ok = [t == g for t, g in zip(tuned_preds, golds)]
         result = {
             "task": "classification",
             "before": before,
             "after": after,
             "delta_accuracy": after["accuracy"] - before["accuracy"],
+            "mcnemar_base_vs_tuned": stats.mcnemar(base_ok, tuned_ok),
             "samples": _pick_samples(inputs, golds, base_preds, tuned_preds),
+            "eval_items": [{"input": i, "gold": g, "base": b, "tuned": t,
+                            "base_ok": b == g, "tuned_ok": t == g}
+                           for i, g, b, t in zip(inputs, golds, base_preds, tuned_preds)],
             "per_class": _per_class(golds, base_preds, tuned_preds),
             "labels": bundle.labels,
+            "eval_set_id": getattr(bundle, "eval_set_id", None),
         }
     else:
         from .judge import available
@@ -184,10 +209,8 @@ def evaluate_base_vs_tuned(cfg, bundle, adapter_dir, progress_cb=None) -> dict:
             print(f"[eval] prompted-baseline arm skipped: {e}")
             prompted_replies = None
 
-        after = {"avg_judge_score": _judge_avg(cfg, inputs, tuned_replies) if judge_on else None,
-                 "n": len(inputs), "note": note}
-        before = {"avg_judge_score": _judge_avg(cfg, inputs, base_replies) if judge_on else None,
-                  "n": len(inputs), "note": note}
+        after = _judge_block(cfg, inputs, tuned_replies, judge_on, note)
+        before = _judge_block(cfg, inputs, base_replies, judge_on, note)
         b, a = before["avg_judge_score"], after["avg_judge_score"]
         samples = [{"input": i, "base": bl, "tuned": tl}
                    for i, bl, tl in zip(inputs, base_replies, tuned_replies)]
@@ -201,6 +224,7 @@ def evaluate_base_vs_tuned(cfg, bundle, adapter_dir, progress_cb=None) -> dict:
             "prompted": prompted,
             "delta_judge": (a - b) if (a is not None and b is not None) else None,
             "samples": samples[:6],
+            "eval_set_id": getattr(bundle, "eval_set_id", None),
         }
 
     # Free VRAM so the "chat with your model" panel can load afterwards.

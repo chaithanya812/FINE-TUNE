@@ -83,8 +83,34 @@ def compare(run_a: str, run_b: str) -> dict:
     def rep(name):
         f = _run_dir(name) / "report.json"
         return json.loads(f.read_text()) if f.exists() else None
-    return {"a": {"run_name": run_a, "report": rep(run_a)},
-            "b": {"run_name": run_b, "report": rep(run_b)}}
+    ra, rb = rep(run_a), rep(run_b)
+    out = {"a": {"run_name": run_a, "report": ra},
+           "b": {"run_name": run_b, "report": rb}}
+    # Statistical comparison (Phase 2): only valid when both scored the SAME frozen
+    # eval set. McNemar on the two tuned models' per-item correctness (paired).
+    try:
+        from . import stats
+        from server import db
+        ar, br = db.get_run(run_a), db.get_run(run_b)
+        same = bool(ar and br and ar.get("eval_set_id")
+                    and ar["eval_set_id"] == br["eval_set_id"])
+        out["comparable"] = same
+        if not same:
+            out["note"] = "not comparable — runs used different eval sets"
+        elif (ra and rb and ra.get("task") == "classification"
+              and ra.get("eval_items") and rb.get("eval_items")):
+            amap = {it["input"]: bool(it["tuned_ok"]) for it in ra["eval_items"]}
+            bmap = {it["input"]: bool(it["tuned_ok"]) for it in rb["eval_items"]}
+            shared = [k for k in amap if k in bmap]
+            a_ok = [amap[k] for k in shared]
+            b_ok = [bmap[k] for k in shared]
+            out["n_shared"] = len(shared)
+            out["mcnemar"] = stats.mcnemar(a_ok, b_ok)
+            out["a"]["accuracy_ci"] = stats.accuracy_ci(a_ok)
+            out["b"]["accuracy_ci"] = stats.accuracy_ci(b_ok)
+    except Exception as e:
+        out["stats_error"] = str(e)
+    return out
 
 
 def delete_run(run_name: str) -> bool:

@@ -21,6 +21,7 @@ class DataBundle:
     labels: list[str]
     task: str
     label_field: str              # always "target" now (kept for call-site compatibility)
+    eval_set_id: str | None = None  # frozen exam this bundle scores on (Phase 2), if any
 
 
 # --------------------------------------------------------------- source loaders
@@ -75,6 +76,31 @@ def load_data(cfg) -> DataBundle:
 
     labels = sorted(df["target"].unique().tolist()) if cfg.task == "classification" else []
 
+    # Phase 2 — frozen eval set: a workspace project scores every version on ONE
+    # immutable, leakage-guarded exam so numbers are comparable across runs. The
+    # training rows are whatever's left after holding that exam out (even as the
+    # dataset is edited later). Guarded: any failure falls back to the random split.
+    if cfg.dataset == "workspace" and cfg.project_id and cfg.dataset_id:
+        try:
+            from finetune_studio import evalsets
+            from server import db, store
+            raw_rows = store.get_dataset_rows(cfg.project_id, cfg.dataset_id)  # keeps 'golden'
+            es = evalsets.get_or_create_frozen(
+                cfg.project_id, raw_rows, cfg.task,
+                source_dataset_version_id=cfg.dataset_id, seed=cfg.seed)
+            eval_rows = db.get_eval_set_rows(es["id"])
+            train_rows = evalsets.held_out_train(raw_rows, eval_rows)
+            if eval_rows and train_rows:
+                eval_df = pd.DataFrame(eval_rows)[["input", "target"]].astype(str).reset_index(drop=True)
+                tdf = pd.DataFrame(train_rows)[["input", "target"]].astype(str)
+                tdf = tdf.sample(frac=1.0, random_state=cfg.seed).reset_index(drop=True)
+                train_df = tdf.iloc[: cfg.n_train].reset_index(drop=True)
+                return DataBundle(train_df, eval_df, labels, cfg.task, "target",
+                                  eval_set_id=es["id"])
+        except Exception as e:
+            print(f"[data] frozen eval unavailable ({e}); falling back to random split")
+
+    # Legacy path (bitext/csv, or if freezing was not possible): random split.
     df = df.sample(frac=1.0, random_state=cfg.seed).reset_index(drop=True)
     df = df.iloc[: min(len(df), cfg.n_train + cfg.n_eval)]
     eval_df = df.iloc[: cfg.n_eval].reset_index(drop=True)
