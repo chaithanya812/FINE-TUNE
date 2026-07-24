@@ -313,3 +313,27 @@ export async function compareRuns(a: string, b: string): Promise<CompareResult |
     return null;
   }
 }
+
+// --- Robustness autotest (Phase 3): perturbations + confidence + regression bank ---
+export type RobustnessResult = {
+  n_cases?: number;
+  n_failures?: number;
+  pass_rate?: number;
+  severity_1?: number;
+  calibration?: { ece?: number | null; n?: number };
+  bank_size?: number;
+  newly_banked?: number;
+  bank_regressed?: number;
+  coverage_matrix?: { label: string; perturbation: string; n: number; fail: number; fail_rate: number }[];
+  abstention?: { input: string; predicted: string; confidence?: number | null }[];
+  error?: string;
+};
+
+export async function runRobustness(pid: string): Promise<RobustnessResult> {
+  try {
+    const res = await fetch(`${API_BASE}/api/projects/${pid}/robustness`, { method: "POST" });
+    return res.json();
+  } catch {
+    return { error: "backend unreachable" };
+  }
+}

@@ -70,3 +70,42 @@ def chat_with_run(run_name: str, message: str, use_adapter: bool = True) -> dict
         with model.disable_adapter():
             reply = chat_fn(model, tok, messages, max_new_tokens=max_new, temperature=temp)
     return {"reply": reply, "task": cfg.task}
+
+
+def classify_with_confidence(run_name: str, message: str) -> dict:
+    """Predicted label + a confidence in [0,1] from label-sequence log-probs.
+
+    Scores each candidate label as a continuation of the prompt (length-normalized to
+    curb bias toward short labels) and softmaxes over labels. Non-classification tasks
+    or any failure fall back to plain generation with confidence=None, so callers
+    (robustness.run_robustness) always get a usable {label, confidence}.
+    """
+    model, tok, cfg, labels = _get_model(run_name)
+    if cfg.task != "classification" or not labels:
+        r = chat_with_run(run_name, message, use_adapter=True)
+        return {"label": (r.get("reply") or "").strip(), "confidence": None}
+    try:
+        import math
+        import torch
+        messages = build_prompt_messages(message, cfg.task, labels)
+        prompt = tok.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+        plen = len(tok(prompt, add_special_tokens=False).input_ids)
+        norm_logps = []
+        for lab in labels:
+            enc = tok(prompt + lab, add_special_tokens=False, return_tensors="pt").to(model.device)
+            with torch.no_grad():
+                logits = model(**enc).logits[0]
+            lp = torch.log_softmax(logits, dim=-1)
+            seq = enc.input_ids[0]
+            total = sum(lp[pos - 1, seq[pos]].item() for pos in range(plen, seq.shape[0]))
+            norm_logps.append(total / max(1, seq.shape[0] - plen))
+        hi = max(norm_logps)
+        exps = [math.exp(x - hi) for x in norm_logps]
+        z = sum(exps) or 1.0
+        probs = [e / z for e in exps]
+        best = max(range(len(labels)), key=lambda i: probs[i])
+        return {"label": labels[best], "confidence": float(probs[best])}
+    except Exception as e:  # noqa: BLE001
+        print(f"[confidence] fell back to generation: {e}")
+        r = chat_with_run(run_name, message, use_adapter=True)
+        return {"label": (r.get("reply") or "").strip(), "confidence": None}

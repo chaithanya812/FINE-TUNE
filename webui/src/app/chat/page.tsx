@@ -19,6 +19,7 @@ import {
   getProjectDetail,
   judgeRun,
   compareRuns,
+  runRobustness,
   wsUrl,
 } from "@/lib/api";
 import type {
@@ -32,6 +33,7 @@ import type {
   ProjectSummary,
   ProjectDetail,
   JudgeResult,
+  RobustnessResult,
 } from "@/lib/api";
 
 type Msg = { kind: "msg"; role: "user" | "assistant"; content: string };
@@ -1465,6 +1467,8 @@ function ProjectsPanel({ onClose, onOpen }: { onClose: () => void; onOpen: (p: P
   const [judging, setJudging] = useState<string | null>(null);
   const [judged, setJudged] = useState<Record<string, JudgeResult>>({});
   const [cmp, setCmp] = useState<Record<string, string>>({});
+  const [rob, setRob] = useState<Record<string, RobustnessResult>>({});
+  const [robBusy, setRobBusy] = useState<string | null>(null);
 
   useEffect(() => {
     listProjects().then(setProjects);
@@ -1495,6 +1499,13 @@ function ProjectsPanel({ onClose, onOpen }: { onClose: () => void; onOpen: (p: P
       text += ` · McNemar p=${mp < 0.001 ? "<0.001" : mp.toFixed(3)}${mp < 0.05 ? " ✓ significant" : " · not significant"}`;
     }
     setCmp((m) => ({ ...m, [d.id]: text }));
+  }
+
+  async function runRob(d: ProjectDetail) {
+    setRobBusy(d.id);
+    const res = await runRobustness(d.id);
+    setRob((m) => ({ ...m, [d.id]: res }));
+    setRobBusy(null);
   }
 
   async function toggle(id: string) {
@@ -1620,11 +1631,35 @@ function ProjectsPanel({ onClose, onOpen }: { onClose: () => void; onOpen: (p: P
                                   Compare last two
                                 </Button>
                               )}
+                              {d.active_run && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => runRob(d)}
+                                  disabled={robBusy === d.id}
+                                >
+                                  {robBusy === d.id ? "checking…" : "Robustness check"}
+                                </Button>
+                              )}
                               {judging && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
                             </div>
                             {cmp[d.id] && (
                               <div className="mt-1.5 font-mono text-[11px] text-muted-foreground">{cmp[d.id]}</div>
                             )}
+                            {rob[d.id] &&
+                              (rob[d.id].error ? (
+                                <div className="mt-1.5 font-mono text-[11px] text-destructive">{rob[d.id].error}</div>
+                              ) : (
+                                <div className="mt-1.5 rounded border p-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                                  robustness: {Math.round((rob[d.id].pass_rate ?? 0) * 100)}% pass ·{" "}
+                                  {rob[d.id].n_cases} perturbations · {rob[d.id].severity_1} confidently-wrong · ECE{" "}
+                                  {rob[d.id].calibration?.ece != null
+                                    ? (rob[d.id].calibration!.ece as number).toFixed(3)
+                                    : "—"}{" "}
+                                  · bank {rob[d.id].bank_size} (+{rob[d.id].newly_banked} new, {rob[d.id].bank_regressed}{" "}
+                                  regressed)
+                                </div>
+                              ))}
                           </>
                         )}
                       </div>

@@ -47,7 +47,7 @@ EVALSET_BLOBS = BLOBS / "evalsets"
 RUN_BLOBS = BLOBS / "runs"
 EXPORTS = STORE / "exports"
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # config keys that don't change the trained artifact -> excluded from config_hash,
 # so the same hyper-parameters hash identically across machines and run names.
@@ -114,6 +114,18 @@ CREATE TABLE IF NOT EXISTS runs (
     created_at          TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
+
+CREATE TABLE IF NOT EXISTS tests (
+    id           TEXT PRIMARY KEY,
+    project_id   TEXT NOT NULL,
+    input        TEXT NOT NULL,
+    expected     TEXT,
+    origin       TEXT DEFAULT 'manual',  -- perturbation|generated|manual|past_failure
+    perturbation TEXT,                    -- which transform, when origin=perturbation
+    severity     INTEGER DEFAULT 1,       -- 1 = worst (high-confidence wrong)
+    created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tests_project ON tests(project_id);
 """
 
 
@@ -150,6 +162,8 @@ def init() -> None:
                 if row is None:
                     conn.execute("INSERT INTO schema_version(version) VALUES (?)",
                                  (SCHEMA_VERSION,))
+                elif row[0] < SCHEMA_VERSION:   # additive tables only -> just bump the marker
+                    conn.execute("UPDATE schema_version SET version=?", (SCHEMA_VERSION,))
         finally:
             conn.close()
         _initialized = True
@@ -563,3 +577,65 @@ def save_run_snapshot(run_id: str, config: dict, report: dict) -> None:
                   json.dumps(config, indent=2, ensure_ascii=False).encode("utf-8"))
     _atomic_write(d / "report.json",
                   json.dumps(report, indent=2, ensure_ascii=False).encode("utf-8"))
+
+
+# ----------------------------------------------------------- regression bank
+def _test_from_row(r: sqlite3.Row) -> dict:
+    return {"id": r["id"], "project_id": r["project_id"], "input": r["input"],
+            "expected": r["expected"], "origin": r["origin"],
+            "perturbation": r["perturbation"], "severity": r["severity"],
+            "created_at": r["created_at"]}
+
+
+def add_test(project_id: str, input: str, expected: str | None = None,
+             origin: str = "manual", perturbation: str | None = None,
+             severity: int = 1, test_id: str | None = None) -> dict:
+    """Add a case to the permanent regression bank (idempotent on test_id)."""
+    init()
+    tid = test_id or ("t_" + uuid.uuid4().hex[:8])
+    created = _now()
+    conn = _connect()
+    try:
+        with conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO tests
+                   (id, project_id, input, expected, origin, perturbation, severity, created_at)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (tid, project_id, input, expected, origin, perturbation, int(severity), created))
+    finally:
+        conn.close()
+    return {"id": tid, "project_id": project_id, "input": input, "expected": expected,
+            "origin": origin, "perturbation": perturbation, "severity": int(severity),
+            "created_at": created}
+
+
+def list_tests(project_id: str) -> list[dict]:
+    """The regression bank for a project, worst (severity 1) first."""
+    init()
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM tests WHERE project_id=? ORDER BY severity, created_at",
+            (project_id,)).fetchall()
+        return [_test_from_row(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def bank_failure(project_id: str, input: str, expected: str | None = None,
+                 origin: str = "past_failure", perturbation: str | None = None,
+                 severity: int = 1) -> dict | None:
+    """Bank a failing case IF it isn't already there (the bank only grows, never
+    duplicates). Dedup by (project, input, expected). Returns the new row, or None."""
+    init()
+    conn = _connect()
+    try:
+        dup = conn.execute(
+            "SELECT id FROM tests WHERE project_id=? AND input=? AND IFNULL(expected,'')=IFNULL(?,'')",
+            (project_id, input, expected)).fetchone()
+    finally:
+        conn.close()
+    if dup:
+        return None
+    return add_test(project_id, input, expected, origin=origin,
+                    perturbation=perturbation, severity=severity)

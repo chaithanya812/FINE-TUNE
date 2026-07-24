@@ -300,6 +300,41 @@ def autotest_ep(pid: str, req: AutotestReq):
                                  proj.get("goal") or proj.get("name", ""), labels=labels, n=req.n)
 
 
+@app.post("/api/projects/{pid}/robustness")
+def robustness_ep(pid: str, n_rows: int = 8):
+    """Confidence-aware robustness autotest (Phase 3): deterministic label-preserving
+    perturbations over the frozen eval rows, metamorphic pass/fail with confidence,
+    calibration (ECE), coverage matrix, abstention probes, and a growing regression
+    bank. No teacher/judge calls — pure model inference."""
+    proj = store.get_project(pid)
+    if not proj:
+        return JSONResponse({"error": "project not found"}, status_code=404)
+    if jm.is_busy():
+        return JSONResponse({"error": "training in progress — try again once it finishes"}, status_code=409)
+    run_name = proj.get("active_run")
+    if not run_name or not model_service.adapter_exists(run_name):
+        return JSONResponse({"error": "no trained model yet for this project"}, status_code=404)
+    from finetune_studio import robustness
+    from server import db
+    eval_sets = db.list_eval_sets(pid)
+    if eval_sets:
+        eval_rows = db.get_eval_set_rows(eval_sets[0]["id"])[:n_rows]
+    else:
+        eval_rows = store.get_dataset_rows(pid, proj.get("dataset_id"))[:n_rows]
+    if not eval_rows:
+        return JSONResponse({"error": "no eval rows to perturb"}, status_code=400)
+    labels = []
+    lp = pathlib.Path(Config().output_root) / run_name / "labels.json"
+    if lp.exists():
+        labels = json.loads(lp.read_text())
+
+    def predict(text: str):
+        return model_service.classify_with_confidence(run_name, text)
+
+    return robustness.run_robustness(pid, eval_rows, predict, labels=labels,
+                                     abstention_probes=robustness.ABSTENTION_PROBES)
+
+
 # -------------------------------------------------------------- deploy / export
 @app.get("/api/runs/{run_name}/export")
 def export_ep(run_name: str):

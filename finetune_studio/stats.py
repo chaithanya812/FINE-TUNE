@@ -71,6 +71,36 @@ def mean_ci(values: Sequence[float], n_resamples: int = 2000, ci: float = 0.95, 
     return {"mean": d["point"], "lo": d["lo"], "hi": d["hi"], "n": d["n"], "ci": ci}
 
 
+def ece(confidences: Sequence[float], correct: Sequence, n_bins: int = 10) -> dict:
+    """Expected Calibration Error + a reliability table.
+
+    Buckets predictions by confidence and compares each bucket's mean confidence to
+    its actual accuracy; ECE is the sample-weighted average gap. A well-calibrated
+    model that says "90%" is right ~90% of the time (ECE near 0). A model that's
+    confidently wrong shows up as a big gap in the high-confidence bins.
+    Returns {ece, n, bins:[{bin,lo,hi,n,conf,acc}]}.
+    """
+    pairs = [(min(max(float(c), 0.0), 1.0), 1.0 if k else 0.0)
+             for c, k in zip(confidences, correct)]
+    n = len(pairs)
+    if n == 0:
+        return {"ece": float("nan"), "n": 0, "bins": []}
+    buckets: list[list[tuple[float, float]]] = [[] for _ in range(n_bins)]
+    for c, k in pairs:
+        buckets[min(int(c * n_bins), n_bins - 1)].append((c, k))
+    table, ece_val = [], 0.0
+    for i, bk in enumerate(buckets):
+        row = {"bin": i, "lo": i / n_bins, "hi": (i + 1) / n_bins, "n": len(bk),
+               "conf": None, "acc": None}
+        if bk:
+            conf = sum(c for c, _ in bk) / len(bk)
+            acc = sum(k for _, k in bk) / len(bk)
+            ece_val += (len(bk) / n) * abs(acc - conf)
+            row["conf"], row["acc"] = conf, acc
+        table.append(row)
+    return {"ece": ece_val, "n": n, "bins": table}
+
+
 def mcnemar(a_correct: Sequence, b_correct: Sequence) -> dict:
     """Exact McNemar test for two classifiers scored on the SAME items (paired).
 
