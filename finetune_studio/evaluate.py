@@ -212,8 +212,9 @@ def evaluate_base_vs_tuned(cfg, bundle, adapter_dir, progress_cb=None) -> dict:
         after = _judge_block(cfg, inputs, tuned_replies, judge_on, note)
         before = _judge_block(cfg, inputs, base_replies, judge_on, note)
         b, a = before["avg_judge_score"], after["avg_judge_score"]
-        samples = [{"input": i, "base": bl, "tuned": tl}
-                   for i, bl, tl in zip(inputs, base_replies, tuned_replies)]
+        golds = [str(r["target"]) for _, r in bundle.eval_df.iterrows()]
+        samples = [{"input": i, "gold": g, "base": bl, "tuned": tl}
+                   for i, g, bl, tl in zip(inputs, golds, base_replies, tuned_replies)]
         if prompted_replies:
             for s, pr in zip(samples, prompted_replies):
                 s["prompted"] = pr

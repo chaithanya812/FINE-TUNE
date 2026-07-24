@@ -416,6 +416,48 @@ def judge_run_ep(run_name: str):
             "n": len(scored), "samples": scored}
 
 
+@app.post("/api/runs/{run_name}/pairwise")
+def pairwise_ep(run_name: str, cap: int = 12):
+    """Judge v2 (Phase 4): reference-guided PAIRWISE over a generation run's STORED
+    samples — tuned vs base (and vs good-prompt), each pair judged twice with A/B
+    swapped. Returns win-rates with CIs, position-swap consistency, verbosity flag,
+    and anchor sanity. Cached in the DB so re-running is near-free. No GPU."""
+    rep_path = pathlib.Path(Config().output_root) / run_name / "report.json"
+    if not rep_path.exists():
+        return JSONResponse({"error": "no report for that run"}, status_code=404)
+    report = json.loads(rep_path.read_text(encoding="utf-8"))
+    if report.get("task") == "classification":
+        return JSONResponse({"error": "pairwise judging is for generation runs"}, status_code=400)
+    samples = report.get("samples") or []
+    if not samples:
+        return JSONResponse({"error": "no stored samples to judge"}, status_code=400)
+    from finetune_studio import judge_v2
+    from server import db
+    cfg = Config()
+    vf = judge_v2.make_verdict_fn(cfg)
+    if vf is None:
+        return JSONResponse({"error": "no judge available — set GEMINI_API_KEY (or JUDGE_API_KEY) in .env"},
+                            status_code=400)
+    # reconstruct gold answers from the run's dataset (older samples predate gold storage)
+    run = db.get_run(run_name)
+    if run and run.get("dataset_version_id"):
+        gold_by_input = {str(r.get("input")): r.get("target")
+                         for r in db.get_dataset_version_rows(run["dataset_version_id"])}
+        for s in samples:
+            if not s.get("gold"):
+                g = gold_by_input.get(str(s.get("input")))
+                if g:
+                    s["gold"] = g
+    result = {"vs_base": judge_v2.run_pairwise(cfg, samples, "tuned", "base", cap=cap, verdict_fn=vf)}
+    if any(s.get("prompted") for s in samples):
+        result["vs_prompted"] = judge_v2.run_pairwise(cfg, samples, "tuned", "prompted",
+                                                       cap=cap, verdict_fn=vf)
+    result["anchors"] = judge_v2.score_anchors(cfg, "generation", verdict_fn=vf)
+    report["pairwise"] = result
+    rep_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return {"run_name": run_name, **result}
+
+
 @app.post("/api/train")
 def start_train(req: TrainReq):
     try:

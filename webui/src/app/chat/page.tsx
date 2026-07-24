@@ -20,6 +20,7 @@ import {
   judgeRun,
   compareRuns,
   runRobustness,
+  pairwiseJudge,
   wsUrl,
 } from "@/lib/api";
 import type {
@@ -34,6 +35,7 @@ import type {
   ProjectDetail,
   JudgeResult,
   RobustnessResult,
+  PairwiseResult,
 } from "@/lib/api";
 
 type Msg = { kind: "msg"; role: "user" | "assistant"; content: string };
@@ -1469,6 +1471,8 @@ function ProjectsPanel({ onClose, onOpen }: { onClose: () => void; onOpen: (p: P
   const [cmp, setCmp] = useState<Record<string, string>>({});
   const [rob, setRob] = useState<Record<string, RobustnessResult>>({});
   const [robBusy, setRobBusy] = useState<string | null>(null);
+  const [pw, setPw] = useState<Record<string, PairwiseResult>>({});
+  const [pwBusy, setPwBusy] = useState<string | null>(null);
 
   useEffect(() => {
     listProjects().then(setProjects);
@@ -1506,6 +1510,14 @@ function ProjectsPanel({ onClose, onOpen }: { onClose: () => void; onOpen: (p: P
     const res = await runRobustness(d.id);
     setRob((m) => ({ ...m, [d.id]: res }));
     setRobBusy(null);
+  }
+
+  async function runPw(d: ProjectDetail) {
+    if (!d.active_run) return;
+    setPwBusy(d.id);
+    const res = await pairwiseJudge(d.active_run);
+    setPw((m) => ({ ...m, [d.id]: res }));
+    setPwBusy(null);
   }
 
   async function toggle(id: string) {
@@ -1641,6 +1653,16 @@ function ProjectsPanel({ onClose, onOpen }: { onClose: () => void; onOpen: (p: P
                                   {robBusy === d.id ? "checking…" : "Robustness check"}
                                 </Button>
                               )}
+                              {d.task_type === "generation" && d.active_run && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => runPw(d)}
+                                  disabled={pwBusy === d.id}
+                                >
+                                  {pwBusy === d.id ? "judging…" : "Pairwise judge"}
+                                </Button>
+                              )}
                               {judging && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
                             </div>
                             {cmp[d.id] && (
@@ -1658,6 +1680,29 @@ function ProjectsPanel({ onClose, onOpen }: { onClose: () => void; onOpen: (p: P
                                     : "—"}{" "}
                                   · bank {rob[d.id].bank_size} (+{rob[d.id].newly_banked} new, {rob[d.id].bank_regressed}{" "}
                                   regressed)
+                                </div>
+                              ))}
+                            {pw[d.id] &&
+                              (pw[d.id].error ? (
+                                <div className="mt-1.5 font-mono text-[11px] text-destructive">{pw[d.id].error}</div>
+                              ) : (
+                                <div className="mt-1.5 rounded border p-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                                  pairwise tuned vs base: win-rate{" "}
+                                  {pw[d.id].vs_base?.a_win_rate != null
+                                    ? `${Math.round(pw[d.id].vs_base!.a_win_rate! * 100)}%`
+                                    : "—"}
+                                  {pw[d.id].vs_base?.lo != null
+                                    ? ` (CI ${Math.round(pw[d.id].vs_base!.lo! * 100)}–${Math.round(
+                                        pw[d.id].vs_base!.hi! * 100,
+                                      )}%)`
+                                    : ""}{" "}
+                                  · swap-consistency{" "}
+                                  {pw[d.id].vs_base?.consistency != null
+                                    ? `${Math.round(pw[d.id].vs_base!.consistency! * 100)}%`
+                                    : "—"}
+                                  {pw[d.id].vs_base?.verbosity_warning ? " · ⚠ verbosity" : ""} · anchors{" "}
+                                  {pw[d.id].anchors?.great_wins}/{pw[d.id].anchors?.n}
+                                  {pw[d.id].anchors?.unstable ? " ⚠ unstable" : " ✓"}
                                 </div>
                               ))}
                           </>

@@ -337,3 +337,35 @@ export async function runRobustness(pid: string): Promise<RobustnessResult> {
     return { error: "backend unreachable" };
   }
 }
+
+// --- Judge v2 (Phase 4): reference-guided pairwise with position swap + CIs ---
+export type PairwiseArm = {
+  arm_a?: string;
+  arm_b?: string;
+  a_win_rate?: number | null;
+  lo?: number | null;
+  hi?: number | null;
+  a_wins?: number;
+  b_wins?: number;
+  ties?: number;
+  consistency?: number | null;
+  verbosity_warning?: boolean;
+  families?: string[];
+};
+
+export type PairwiseResult = {
+  run_name?: string;
+  vs_base?: PairwiseArm;
+  vs_prompted?: PairwiseArm;
+  anchors?: { n?: number; great_wins?: number; unstable?: boolean };
+  error?: string;
+};
+
+export async function pairwiseJudge(runName: string): Promise<PairwiseResult> {
+  try {
+    const res = await fetch(`${API_BASE}/api/runs/${runName}/pairwise`, { method: "POST" });
+    return res.json();
+  } catch {
+    return { error: "backend unreachable" };
+  }
+}

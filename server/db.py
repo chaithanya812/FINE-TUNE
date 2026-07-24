@@ -47,7 +47,7 @@ EVALSET_BLOBS = BLOBS / "evalsets"
 RUN_BLOBS = BLOBS / "runs"
 EXPORTS = STORE / "exports"
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # config keys that don't change the trained artifact -> excluded from config_hash,
 # so the same hyper-parameters hash identically across machines and run names.
@@ -126,6 +126,13 @@ CREATE TABLE IF NOT EXISTS tests (
     created_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tests_project ON tests(project_id);
+
+CREATE TABLE IF NOT EXISTS judgments (
+    hash        TEXT PRIMARY KEY,       -- sha256(judge_model, input, replies, orientation)
+    verdict     TEXT NOT NULL,          -- A|B|tie (or a rubric json)
+    judge_model TEXT,
+    created_at  TEXT NOT NULL
+);
 """
 
 
@@ -639,3 +646,27 @@ def bank_failure(project_id: str, input: str, expected: str | None = None,
         return None
     return add_test(project_id, input, expected, origin=origin,
                     perturbation=perturbation, severity=severity)
+
+
+# ------------------------------------------------------- judgment cache (judge v2)
+def cache_get(hash_key: str) -> str | None:
+    """Return a cached judge verdict, or None. Makes re-running an eval near-free."""
+    init()
+    conn = _connect()
+    try:
+        r = conn.execute("SELECT verdict FROM judgments WHERE hash=?", (hash_key,)).fetchone()
+        return r["verdict"] if r else None
+    finally:
+        conn.close()
+
+
+def cache_put(hash_key: str, verdict: str, judge_model: str | None = None) -> None:
+    init()
+    conn = _connect()
+    try:
+        with conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO judgments (hash, verdict, judge_model, created_at) "
+                "VALUES (?,?,?,?)", (hash_key, verdict, judge_model, _now()))
+    finally:
+        conn.close()
