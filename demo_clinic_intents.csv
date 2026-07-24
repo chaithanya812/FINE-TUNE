@@ -7,8 +7,8 @@ input,target
 "Can I come in tomorrow morning?",book_appointment
 "I'd like to reserve a slot for a whitening session",book_appointment
 "Looking to book my first visit with you",book_appointment
-"Is there availability on Monday?",book_appointment
-"I need to see the doctor as soon as possible",book_appointment
+"Is there any availability on Monday?",book_appointment
+"I need to see the dentist as soon as possible",book_appointment
 "Can I book online or do I have to call?",book_appointment
 "Please schedule me in for a routine exam",book_appointment
 "I'd like an appointment for a root canal consult",book_appointment
@@ -47,10 +47,10 @@ input,target
 "Is it possible to reschedule to the morning?",cancel_reschedule
 "I want to cancel the cleaning I scheduled",cancel_reschedule
 "Can we bump my appointment by a week?",cancel_reschedule
-"I'd like to cancel and get a refund if possible",cancel_reschedule
+"I'd like to cancel my visit for now",cancel_reschedule
 "Need to reschedule because my kid is sick",cancel_reschedule
 "Can I move tomorrow's slot to Saturday?",cancel_reschedule
-"Please cancel my consultation for now",cancel_reschedule
+"Please cancel my consultation",cancel_reschedule
 "I have to reschedule my root canal appointment",cancel_reschedule
 "Can I change my appointment date to later this month?",cancel_reschedule
 "Sorry for the short notice but I must cancel",cancel_reschedule
@@ -62,33 +62,63 @@ input,target
 "How much does a routine cleaning cost?",pricing
 "What are your prices for a check-up?",pricing
 "Do you have a fee schedule I can look at?",pricing
-"How much is a whitening treatment?",pricing
-"What's the cost of a filling?",pricing
-"Is the first consultation free?",pricing
-"How much would a root canal run me?",pricing
+"How much is teeth whitening?",pricing
+"What's the cash price for a filling?",pricing
+"How much would a root canal cost me?",pricing
 "Do you offer any payment plans?",pricing
-"What are your rates for new patients?",pricing
+"What are your self-pay rates?",pricing
 "How much do you charge for x-rays?",pricing
-"Is there a fee for last-minute cancellations?",pricing
-"What does a full exam cost?",pricing
+"What does a full exam cost out of pocket?",pricing
 "How much for a set of dentures?",pricing
-"Are your prices different on weekends?",pricing
-"What's the price for seeing a specialist?",pricing
-"Do you have any discounts for students?",pricing
+"What's the price of a crown?",pricing
 "How much is a deep cleaning?",pricing
-"What would braces cost approximately?",pricing
-"Is getting a quote free of charge?",pricing
+"What would braces cost in total?",pricing
 "How much do you charge per visit?",pricing
-"What are the costs involved in an implant?",pricing
-"Do you charge extra for emergency visits?",pricing
+"What's the cost of a dental implant?",pricing
 "How much is a night guard?",pricing
-"Can you tell me your fees before I book?",pricing
-"Are consultations billed separately from treatment?",pricing
+"What's your cheapest cleaning option?",pricing
 "How much would two cleanings cost together?",pricing
-"What's the most affordable option for a check-up?",pricing
-"Do your prices include tax?",pricing
-"How much is a follow-up appointment?",pricing
-"What are the fees for a crown?",pricing
+"What are the fees for a follow-up visit?",pricing
+"How much if I pay in cash?",pricing
+"What's the price if I don't have insurance?",pricing
+"How much does an initial consultation run?",pricing
+"What do veneers cost?",pricing
+"How much for a full smile makeover?",pricing
+"Can I get a total cost estimate?",pricing
+"How much are your fillings?",pricing
+"What's the price for a kids check-up?",pricing
+"How much is a tooth extraction?",pricing
+"What would a bridge cost me?",pricing
+"Do you take my insurance?",insurance
+"Is this covered by my plan?",insurance
+"What's my copay for a cleaning?",insurance
+"Do you accept Delta Dental?",insurance
+"How much will I owe after insurance?",insurance
+"Are you in-network with my provider?",insurance
+"Will my plan cover a root canal?",insurance
+"What's my out-of-pocket cost with insurance?",insurance
+"Do you bill insurance directly?",insurance
+"What portion does my insurance pay?",insurance
+"Is a check-up covered under my policy?",insurance
+"Do you take Medicaid or state plans?",insurance
+"How much will insurance cover for braces?",insurance
+"Can you verify my benefits before I come in?",insurance
+"What's my deductible for dental work?",insurance
+"Do you accept my dental card?",insurance
+"Will I owe anything if I'm fully insured?",insurance
+"How much does a cleaning cost with my plan?",insurance
+"Is whitening covered by insurance?",insurance
+"Do you handle insurance claims for me?",insurance
+"What's my coinsurance on a filling?",insurance
+"Are implants covered by insurance?",insurance
+"How much of the fee does my plan pay?",insurance
+"Do you work with PPO dental plans?",insurance
+"Is my visit covered if I recently switched jobs?",insurance
+"What happens if my insurance denies the claim?",insurance
+"Do you accept HSA or FSA cards?",insurance
+"How much will my plan reimburse me?",insurance
+"Is a specialist referral covered by insurance?",insurance
+"What's the price after my insurance kicks in?",insurance
 "What time do you open on weekdays?",hours_location
 "Where exactly are you located?",hours_location
 "Are you open on Saturdays?",hours_location
