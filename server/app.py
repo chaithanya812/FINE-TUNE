@@ -232,8 +232,8 @@ class DatasetEditReq(BaseModel):
 
 @app.put("/api/projects/{pid}/data/{did}")
 def data_save_ep(pid: str, did: str, req: DatasetEditReq):
-    """Save the user's edited dataset back (overwrites the same dataset id) and
-    recompute stats. This is what powers the spreadsheet-style editor."""
+    """Save the user's edited rows as a NEW immutable dataset version (linked to the
+    version they edited from) and point the project at it. Powers the spreadsheet editor."""
     proj = store.get_project(pid)
     if not proj:
         return JSONResponse({"error": "project not found"}, status_code=404)
@@ -253,9 +253,9 @@ def data_save_ep(pid: str, did: str, req: DatasetEditReq):
     from finetune_studio import dataio
     st = dataio.stats(rows, task)
     st["split"] = dataio.split_counts(rows)
-    store.save_dataset(pid, rows, {"source": "edited", "task": task, **st}, dataset_id=did)
-    store.update_project(pid, dataset_id=did, status="data_ready")
-    return {"dataset_id": did, "stats": st, "n": len(rows)}
+    new_did = store.save_dataset(pid, rows, {"source": "edited", "task": task, **st}, dataset_id=did)
+    store.update_project(pid, dataset_id=new_did, status="data_ready")
+    return {"dataset_id": new_did, "parent_id": did, "stats": st, "n": len(rows)}
 
 
 @app.get("/api/projects/{pid}/colab")
@@ -267,8 +267,9 @@ def colab_ep(pid: str):
     did = proj.get("dataset_id")
     rows = store.get_dataset_rows(pid, did) if did else []
     from finetune_studio import colab_export
-    from config import PROJECT_ROOT
-    out = PROJECT_ROOT / "workspaces" / pid / f"{pid}_colab.ipynb"
+    from server import db
+    out = db.EXPORTS / f"{pid}_colab.ipynb"
+    out.parent.mkdir(parents=True, exist_ok=True)
     colab_export.write_project_notebook(proj, rows, path=out)
     return FileResponse(str(out), filename=f"{proj.get('name', 'model')}_colab.ipynb",
                         media_type="application/x-ipynb+json")

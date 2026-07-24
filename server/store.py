@@ -1,157 +1,148 @@
-"""File-based workspace store — projects, datasets, and run records on disk.
+"""Compatibility layer: the legacy file-based store API, now backed by db.py.
 
-Deliberately simple (JSON files, no DB) for a single-user local app. Layout:
+The studio used to keep projects and datasets as loose JSON/JSONL files under
+workspaces/<pid>/. That layer allowed in-place mutation (editing a dataset
+overwrote its file), so runs could not be pinned to the exact data that produced
+them. Phase 1 of the evals overhaul replaced storage with an immutable,
+content-addressed store indexed by SQLite (server/db.py).
 
-    workspaces/<project_id>/project.json          # the project manifest
-    workspaces/<project_id>/datasets/<id>.jsonl   # dataset rows ({input, target})
-    workspaces/<project_id>/datasets/<id>.json    # dataset metadata (stats, split)
+This module keeps the OLD 10-function API and its legacy dict shapes so every
+existing endpoint (app.py, agent.py, jobs.py, data.py) keeps working unchanged.
+New code should prefer db.py directly. The important behaviour change is that
+save_dataset() now mints a NEW immutable dataset version (with a parent link)
+instead of overwriting — nothing is ever mutated in place again.
 
-Trained adapters still live in runs/<run_name>/ as before; a project references its
-run_names, so we get history/versioning without moving the engine's output.
+Mapping from legacy concepts to the new store:
+    legacy project["dataset_id"]  <-> projects.dataset_version_id (the active version)
+    legacy project["runs"] list   <-> the runs table (reconstructed per project)
+    a dataset "did"               <-> a dataset_versions.id (immutable content blob)
 """
 from __future__ import annotations
-import json
-import shutil
-import threading
-import time
+
 import uuid
-from pathlib import Path
 
-from config import PROJECT_ROOT
-
-WORKSPACES = PROJECT_ROOT / "workspaces"
-_LOCK = threading.RLock()
+from server import db
 
 
-def _now() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%S")
+# --------------------------------------------------------- legacy-shape helpers
+def _legacy_project(pid: str) -> dict | None:
+    """Reassemble the full legacy project dict the old file store returned."""
+    p = db.fetch_project(pid)
+    if p is None:
+        return None
+    runs = [
+        {**r["metrics"], "run_name": r["id"], "version": r["version"],
+         "created_at": r["created_at"]}
+        for r in db.list_runs(pid)
+    ]
+    return {
+        "id": p["id"], "name": p["name"], "goal": p["goal"],
+        "task_type": p["task_type"], "base_model": p["base_model"], "method": p["method"],
+        "config": p["config"], "plan": p["plan"], "plan_approved": p["plan_approved"],
+        "dataset_id": p["dataset_version_id"],       # legacy name for the active version
+        "status": p["status"], "runs": runs, "active_run": p["active_run"],
+        "iterations": p["iterations"],
+        "created_at": p["created_at"], "updated_at": p["updated_at"],
+    }
 
 
-def _pdir(pid: str) -> Path:
-    return WORKSPACES / pid
-
-
-def _pfile(pid: str) -> Path:
-    return _pdir(pid) / "project.json"
+def _legacy_meta(dv: dict | None) -> dict | None:
+    """Reassemble the legacy dataset meta dict (domain meta + id/n/created_at)."""
+    if dv is None:
+        return None
+    meta = dict(dv.get("meta") or {})
+    meta.setdefault("source", dv.get("source", ""))
+    meta["id"] = dv["id"]
+    meta["n"] = dv["n_rows"]
+    meta["created_at"] = dv["created_at"]
+    return meta
 
 
 # --------------------------------------------------------------------- projects
 def create_project(name: str, goal: str = "", task_type: str = "classification",
-                   base_model: str = "Qwen/Qwen2.5-0.5B-Instruct", method: str = "qlora") -> dict:
+                   base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+                   method: str = "qlora") -> dict:
     pid = "p_" + uuid.uuid4().hex[:8]
-    proj = {
-        "id": pid,
-        "name": name or "Untitled project",
-        "goal": goal,
-        "task_type": task_type,
-        "base_model": base_model,
-        "method": method,
-        "config": {},           # training overrides (label_field, epochs, n_train, ...)
-        "plan": None,           # the approved Plan Card
-        "plan_approved": False,
-        "dataset_id": None,     # active dataset
-        "status": "draft",      # draft|planned|data_ready|training|evaluated|deployed
-        "runs": [],             # [{run_name, version, task, before, after, delta, created_at}]
-        "active_run": None,
-        "iterations": [],       # improvement-loop history
-        "created_at": _now(),
-        "updated_at": _now(),
-    }
-    with _LOCK:
-        (_pdir(pid) / "datasets").mkdir(parents=True, exist_ok=True)
-        _pfile(pid).write_text(json.dumps(proj, indent=2))
-    return proj
+    db.insert_project({
+        "id": pid, "name": name or "Untitled project", "goal": goal,
+        "task_type": task_type, "base_model": base_model, "method": method,
+        "status": "draft", "plan_approved": False, "config": {},
+        "plan": None, "iterations": [],
+    })
+    return _legacy_project(pid)
 
 
 def get_project(pid: str) -> dict | None:
-    f = _pfile(pid)
-    return json.loads(f.read_text()) if f.exists() else None
+    return _legacy_project(pid)
 
 
 def list_projects() -> list[dict]:
-    if not WORKSPACES.exists():
-        return []
-    out = []
-    for d in sorted(WORKSPACES.iterdir(), reverse=True):
-        f = d / "project.json"
-        if f.exists():
-            p = json.loads(f.read_text())
-            out.append({k: p.get(k) for k in
-                        ("id", "name", "task_type", "base_model", "status",
-                         "created_at", "updated_at", "active_run")})
-    return out
+    return [
+        {k: p.get(k) for k in ("id", "name", "task_type", "base_model", "status",
+                               "created_at", "updated_at", "active_run")}
+        for p in db.fetch_projects()
+    ]
 
 
+# legacy patchable set (unknown keys ignored, exactly like the old store)
 _PATCHABLE = {"name", "goal", "task_type", "base_model", "method", "config",
               "plan", "plan_approved", "dataset_id", "status", "active_run", "iterations"}
 
 
 def update_project(pid: str, **fields) -> dict | None:
-    with _LOCK:
-        proj = get_project(pid)
-        if not proj:
-            return None
-        for k, v in fields.items():
-            if k not in _PATCHABLE:
-                continue
-            if k == "config" and isinstance(v, dict):
-                proj.setdefault("config", {}).update(v)   # deep-merge config
-            else:
-                proj[k] = v
-        proj["updated_at"] = _now()
-        _pfile(pid).write_text(json.dumps(proj, indent=2))
-    return proj
+    patch = {k: v for k, v in fields.items() if k in _PATCHABLE}
+    if "dataset_id" in patch:                       # legacy name -> new column
+        patch["dataset_version_id"] = patch.pop("dataset_id")
+    if db.update_project_fields(pid, patch) is None:
+        return None
+    return _legacy_project(pid)
 
 
 def delete_project(pid: str) -> bool:
-    d = _pdir(pid)
-    if d.exists():
-        shutil.rmtree(d, ignore_errors=True)
-        return True
-    return False
+    # Index rows are removed; content-addressed blobs and any migrated
+    # workspaces/<pid> backup are left untouched.
+    return db.delete_project(pid)
 
 
-def add_run(pid: str, run_record: dict) -> dict | None:
-    """Append a run record (auto-stamped with version + created_at) and mark it active."""
-    with _LOCK:
-        proj = get_project(pid)
-        if not proj:
-            return None
-        rec = {"created_at": _now(), **run_record, "version": len(proj.get("runs", [])) + 1}
-        proj.setdefault("runs", []).append(rec)
-        proj["active_run"] = rec.get("run_name")
-        proj["updated_at"] = _now()
-        _pfile(pid).write_text(json.dumps(proj, indent=2))
-    return proj
+def add_run(pid: str, run_record: dict, dataset_version_id: str | None = None,
+            config: dict | None = None) -> dict | None:
+    """Append a run PINNED to the data + config that produced it, mark it active.
+
+    `dataset_version_id` and `config` are new optional pins (jobs.py passes them);
+    without them the run is still recorded, just without provenance (legacy calls).
+    """
+    if db.fetch_project(pid) is None:
+        return None
+    run_name = run_record.get("run_name") or ("run_" + uuid.uuid4().hex[:8])
+    db.add_run(pid, run_name, dataset_version_id=dataset_version_id, config=config,
+               metrics=run_record)
+    db.update_project_fields(pid, {"active_run": run_name})
+    return _legacy_project(pid)
 
 
 # --------------------------------------------------------------------- datasets
 def save_dataset(pid: str, rows: list[dict], meta: dict, dataset_id: str | None = None) -> str:
-    did = dataset_id or ("d_" + uuid.uuid4().hex[:8])
-    ddir = _pdir(pid) / "datasets"
-    ddir.mkdir(parents=True, exist_ok=True)
-    with (ddir / f"{did}.jsonl").open("w", encoding="utf-8") as fh:
-        for r in rows:
-            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
-    meta = {**meta, "id": did, "n": len(rows), "created_at": _now()}
-    (ddir / f"{did}.json").write_text(json.dumps(meta, indent=2))
-    return did
+    """Save a dataset as a NEW immutable version and return its id.
+
+    Unlike the old store, this never overwrites: passing `dataset_id` means "this
+    was edited FROM that version", so the new version records it as parent_id
+    (lineage). Callers should use the RETURNED id as the project's active dataset.
+    """
+    dv = db.add_dataset_version(
+        pid, rows, meta,
+        parent_id=dataset_id,
+        source=str(meta.get("source", "")),
+    )
+    return dv["id"]
 
 
 def get_dataset_rows(pid: str, did: str) -> list[dict]:
-    f = _pdir(pid) / "datasets" / f"{did}.jsonl"
-    if not f.exists():
-        return []
-    return [json.loads(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip()]
+    return db.get_dataset_version_rows(did)
 
 
 def get_dataset_meta(pid: str, did: str) -> dict | None:
-    f = _pdir(pid) / "datasets" / f"{did}.json"
-    return json.loads(f.read_text()) if f.exists() else None
+    return _legacy_meta(db.get_dataset_version(did))
 
 
 def list_datasets(pid: str) -> list[dict]:
-    ddir = _pdir(pid) / "datasets"
-    if not ddir.exists():
-        return []
-    return [json.loads(p.read_text()) for p in sorted(ddir.glob("*.json"))]
+    return [_legacy_meta(dv) for dv in db.list_dataset_versions(pid)]

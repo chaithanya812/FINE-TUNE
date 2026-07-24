@@ -20,6 +20,7 @@ dist/
 
 # per-user app data + local config (not part of the product)
 workspaces/
+store/
 settings.json
 *.log
 

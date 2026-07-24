@@ -117,13 +117,17 @@ class JobManager:
             # Record this run against its project (history / versioning).
             pid = job.params.get("project_id")
             if pid:
-                from server import store
+                from dataclasses import asdict
+                from server import store, db
                 summary = {"run_name": cfg.run_name, "task": res.get("task")}
                 if res.get("task") == "classification":
                     summary.update(before=round(res["before"]["accuracy"], 4),
                                    after=round(res["after"]["accuracy"], 4),
                                    delta=round(res.get("delta_accuracy", 0.0), 4))
-                store.add_run(pid, summary)
+                # Pin the run to the exact data + config that produced it, and
+                # snapshot its config/report immutably into the store.
+                store.add_run(pid, summary, dataset_version_id=cfg.dataset_id, config=asdict(cfg))
+                db.save_run_snapshot(cfg.run_name, asdict(cfg), res)
                 store.update_project(pid, status="evaluated")
 
             job.emit({"type": "result", "report": res, "run_name": cfg.run_name})
